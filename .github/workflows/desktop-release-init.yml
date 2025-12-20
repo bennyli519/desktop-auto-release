@@ -198,8 +198,24 @@ jobs:
                 "type": "section",
                 "text": {
                   "type": "mrkdwn",
-                  "text": "📢 *Need to include your fix in this release?*\nPlease cherry-pick your commits to \`desktop/release-$NEW_VERSION\` branch and open a PR."
+                  "text": "📢 *Need to include your fix in this release?*\nCherry-pick your commits using the command below:"
                 }
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "\`\`\`git fetch origin\ngit checkout -b my-fix desktop/release-$NEW_VERSION\ngit cherry-pick <commit-sha>\ngit push origin my-fix\`\`\`"
+                }
+              },
+              {
+                "type": "context",
+                "elements": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "💡 Then create a PR from \`my-fix\` → \`desktop/release-$NEW_VERSION\`"
+                  }
+                ]
               },
               {
                 "type": "actions",
@@ -208,19 +224,10 @@ jobs:
                     "type": "button",
                     "text": {
                       "type": "plain_text",
-                      "text": "View Branch",
+                      "text": "📂 View Release Branch",
                       "emoji": true
                     },
                     "url": "$REPO_URL/tree/desktop/release-$NEW_VERSION"
-                  },
-                  {
-                    "type": "button",
-                    "text": {
-                      "type": "plain_text",
-                      "text": "Create PR",
-                      "emoji": true
-                    },
-                    "url": "$REPO_URL/compare/desktop/release-$NEW_VERSION...main?expand=1"
                   }
                 ]
               }
