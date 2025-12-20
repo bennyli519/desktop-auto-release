@@ -125,16 +125,18 @@ jobs:
     name: Notify Slack
     needs: [validate-and-calculate, create-branch]
     runs-on: ubuntu-latest
+    env:
+      CURRENT_VERSION: ${{ needs.validate-and-calculate.outputs.current_version }}
+      NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
+      BASE_BRANCH: ${{ github.ref_name }}
+      REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+      ACTOR: ${{ github.actor }}
+      BUMP_TYPE: ${{ inputs.bump_type }}
     steps:
       - name: Send Slack notification
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          CURRENT_VERSION: ${{ needs.validate-and-calculate.outputs.current_version }}
-          NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
-          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
           # 根据 bump type 生成描述
-          case "${{ inputs.bump_type }}" in
+          case "$BUMP_TYPE" in
             major)
               BUMP_DESC="This is a *major version* with breaking changes or significant new features."
               ;;
@@ -146,81 +148,87 @@ jobs:
               ;;
           esac
 
-          curl -X POST -H 'Content-type: application/json' \
-            --data "{
-              \"blocks\": [
-                {
-                  \"type\": \"header\",
-                  \"text\": {
-                    \"type\": \"plain_text\",
-                    \"text\": \"🚀 Desktop App ${NEW_VERSION} Release Initiated\",
-                    \"emoji\": true
-                  }
-                },
-                {
-                  \"type\": \"section\",
-                  \"text\": {
-                    \"type\": \"mrkdwn\",
-                    \"text\": \"Hey team! 👋\n\nA new release branch has been created for Desktop App *${NEW_VERSION)}*.\n\n${BUMP_DESC}\"
-                  }
-                },
-                {
-                  \"type\": \"divider\"
-                },
-                {
-                  \"type\": \"section\",
-                  \"fields\": [
-                    {
-                      \"type\": \"mrkdwn\",
-                      \"text\": \"*New Branch:*\n\`desktop/release-${NEW_VERSION}\`\"
-                    },
-                    {
-                      \"type\": \"mrkdwn\",
-                      \"text\": \"*Based On:*\n\`${{ github.ref_name }}\`\"
-                    },
-                    {
-                      \"type\": \"mrkdwn\",
-                      \"text\": \"*Version:*\n\`${CURRENT_VERSION}\` → \`${NEW_VERSION}\`\"
-                    },
-                    {
-                      \"type\": \"mrkdwn\",
-                      \"text\": \"*Created By:*\n${{ github.actor }}\"
-                    }
-                  ]
-                },
-                {
-                  \"type\": \"divider\"
-                },
-                {
-                  \"type\": \"section\",
-                  \"text\": {
-                    \"type\": \"mrkdwn\",
-                    \"text\": \"📢 *Need to include your fix in this release?*\nPlease cherry-pick your commits to \`desktop/release-${NEW_VERSION}\` branch and open a PR.\"
-                  }
-                },
-                {
-                  \"type\": \"actions\",
-                  \"elements\": [
-                    {
-                      \"type\": \"button\",
-                      \"text\": {
-                        \"type\": \"plain_text\",
-                        \"text\": \"View Branch\",
-                        \"emoji\": true
-                      },
-                      \"url\": \"${REPO_URL}/tree/desktop/release-${NEW_VERSION}\"
-                    },
-                    {
-                      \"type\": \"button\",
-                      \"text\": {
-                        \"type\": \"plain_text\",
-                        \"text\": \"Create PR\",
-                        \"emoji\": true
-                      },
-                      \"url\": \"${REPO_URL}/compare/desktop/release-${NEW_VERSION}...main?expand=1\"
-                    }
-                  ]
+          # 构建 JSON payload
+          cat > /tmp/slack_payload.json << EOF
+          {
+            "blocks": [
+              {
+                "type": "header",
+                "text": {
+                  "type": "plain_text",
+                  "text": "🚀 Desktop App $NEW_VERSION Release Initiated",
+                  "emoji": true
                 }
-              ]
-            }" \
-            $SLACK_WEBHOOK_URL
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "Hey team! 👋\n\nA new release branch has been created for Desktop App *$NEW_VERSION*.\n\n$BUMP_DESC"
+                }
+              },
+              {
+                "type": "divider"
+              },
+              {
+                "type": "section",
+                "fields": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "*New Branch:*\n\`desktop/release-$NEW_VERSION\`"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Based On:*\n\`$BASE_BRANCH\`"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Version:*\n\`$CURRENT_VERSION\` → \`$NEW_VERSION\`"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Created By:*\n$ACTOR"
+                  }
+                ]
+              },
+              {
+                "type": "divider"
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "📢 *Need to include your fix in this release?*\nPlease cherry-pick your commits to \`desktop/release-$NEW_VERSION\` branch and open a PR."
+                }
+              },
+              {
+                "type": "actions",
+                "elements": [
+                  {
+                    "type": "button",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "View Branch",
+                      "emoji": true
+                    },
+                    "url": "$REPO_URL/tree/desktop/release-$NEW_VERSION"
+                  },
+                  {
+                    "type": "button",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "Create PR",
+                      "emoji": true
+                    },
+                    "url": "$REPO_URL/compare/desktop/release-$NEW_VERSION...main?expand=1"
+                  }
+                ]
+              }
+            ]
+          }
+          EOF
+
+          # 发送到 Slack
+          curl -X POST -H 'Content-type: application/json' \
+            --data @/tmp/slack_payload.json \
+            ${{ secrets.SLACK_WEBHOOK_URL }}
