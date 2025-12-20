@@ -131,7 +131,21 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           CURRENT_VERSION: ${{ needs.validate-and-calculate.outputs.current_version }}
           NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
+          # 根据 bump type 生成描述
+          case "${{ inputs.bump_type }}" in
+            major)
+              BUMP_DESC="This is a *major version* with breaking changes or significant new features."
+              ;;
+            minor)
+              BUMP_DESC="This is a *minor version* with new features and improvements."
+              ;;
+            patch)
+              BUMP_DESC="This is a *patch version* for bug fixes and critical issues."
+              ;;
+          esac
+
           curl -X POST -H 'Content-type: application/json' \
             --data "{
               \"blocks\": [
@@ -139,22 +153,19 @@ jobs:
                   \"type\": \"header\",
                   \"text\": {
                     \"type\": \"plain_text\",
-                    \"text\": \"🚀 Desktop Release ${NEW_VERSION} Initialized\",
+                    \"text\": \"🚀 Desktop App ${NEW_VERSION} Release Initiated\",
                     \"emoji\": true
                   }
                 },
                 {
                   \"type\": \"section\",
-                  \"fields\": [
-                    {
-                      \"type\": \"mrkdwn\",
-                      \"text\": \"*Version Bump:*\n\`${CURRENT_VERSION}\` → \`${NEW_VERSION}\` (${{ inputs.bump_type }})\"
-                    },
-                    {
-                      \"type\": \"mrkdwn\",
-                      \"text\": \"*Created By:*\n@${{ github.actor }}\"
-                    }
-                  ]
+                  \"text\": {
+                    \"type\": \"mrkdwn\",
+                    \"text\": \"Hey team! 👋\n\nA new release branch has been created for Desktop App *${NEW_VERSION)}*.\n\n${BUMP_DESC}\"
+                  }
+                },
+                {
+                  \"type\": \"divider\"
                 },
                 {
                   \"type\": \"section\",
@@ -165,16 +176,50 @@ jobs:
                     },
                     {
                       \"type\": \"mrkdwn\",
-                      \"text\": \"*Base Branch:*\n\`${{ github.ref_name }}\`\"
+                      \"text\": \"*Based On:*\n\`${{ github.ref_name }}\`\"
+                    },
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*Version:*\n\`${CURRENT_VERSION}\` → \`${NEW_VERSION}\`\"
+                    },
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*Created By:*\n${{ github.actor }}\"
                     }
                   ]
+                },
+                {
+                  \"type\": \"divider\"
                 },
                 {
                   \"type\": \"section\",
                   \"text\": {
                     \"type\": \"mrkdwn\",
-                    \"text\": \"*Next Steps:*\n1. Create feature branch from \`desktop/release-${NEW_VERSION}\`\n2. Cherry-pick fixes & bump versions\n3. Create PR to merge into release branch\"
+                    \"text\": \"📢 *Need to include your fix in this release?*\nPlease cherry-pick your commits to \`desktop/release-${NEW_VERSION}\` branch and open a PR.\"
                   }
+                },
+                {
+                  \"type\": \"actions\",
+                  \"elements\": [
+                    {
+                      \"type\": \"button\",
+                      \"text\": {
+                        \"type\": \"plain_text\",
+                        \"text\": \"View Branch\",
+                        \"emoji\": true
+                      },
+                      \"url\": \"${REPO_URL}/tree/desktop/release-${NEW_VERSION}\"
+                    },
+                    {
+                      \"type\": \"button\",
+                      \"text\": {
+                        \"type\": \"plain_text\",
+                        \"text\": \"Create PR\",
+                        \"emoji\": true
+                      },
+                      \"url\": \"${REPO_URL}/compare/desktop/release-${NEW_VERSION}...main?expand=1\"
+                    }
+                  ]
                 }
               ]
             }" \
