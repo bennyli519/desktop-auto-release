@@ -258,10 +258,45 @@ jobs:
                     "type": "button",
                     "text": {
                       "type": "plain_text",
-                      "text": "📂 View Release Branch",
+                      "text": "📂 View Branch",
                       "emoji": true
                     },
                     "url": "$REPO_URL/tree/desktop/release-$NEW_VERSION"
+                  }
+                ]
+              },
+              {
+                "type": "divider"
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "🏗️ *Ready to build?* After cherry-picks are merged, trigger the build:"
+                }
+              },
+              {
+                "type": "actions",
+                "elements": [
+                  {
+                    "type": "button",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "🔨 Build Staging",
+                      "emoji": true
+                    },
+                    "style": "primary",
+                    "url": "$REPO_URL/actions/workflows/desktop-app-publish-staging.yml"
+                  },
+                  {
+                    "type": "button",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "🚀 Build Production",
+                      "emoji": true
+                    },
+                    "style": "danger",
+                    "url": "$REPO_URL/actions/workflows/desktop-app-publish-production.yml"
                   }
                 ]
               }
