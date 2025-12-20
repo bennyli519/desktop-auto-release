@@ -1,26 +1,58 @@
 name: Desktop Release - Cherry Pick
 
 on:
+  # 手动触发
   workflow_dispatch:
     inputs:
       commit_shas:
-        description: 'Commit SHA(s) to cherry-pick (comma-separated for multiple)'
+        description: 'Commit SHA(s) to cherry-pick (comma-separated)'
         required: true
         type: string
-        # Example: abc1234 or abc1234,def5678,ghi9012
+      target_branch:
+        description: 'Target release branch (optional, uses current branch if empty)'
+        required: false
+        type: string
+
+  # Slack webhook 触发
+  repository_dispatch:
+    types: [cherry-pick]
+    # payload 格式:
+    # {
+    #   "event_type": "cherry-pick",
+    #   "client_payload": {
+    #     "commit_shas": "abc123,def456",
+    #     "target_branch": "desktop/release-0.8.1",
+    #     "slack_channel": "C123456",
+    #     "slack_thread_ts": "1234567890.123456",
+    #     "triggered_by": "benny"
+    #   }
+    # }
 
 permissions:
   contents: write
   pull-requests: write
 
+env:
+  # 从 workflow_dispatch 或 repository_dispatch 获取参数
+  COMMIT_SHAS: ${{ inputs.commit_shas || github.event.client_payload.commit_shas }}
+  TARGET_BRANCH: ${{ inputs.target_branch || github.event.client_payload.target_branch || github.ref_name }}
+  TRIGGERED_BY: ${{ github.actor || github.event.client_payload.triggered_by }}
+  SLACK_CHANNEL: ${{ github.event.client_payload.slack_channel || '' }}
+  SLACK_THREAD_TS: ${{ github.event.client_payload.slack_thread_ts || '' }}
+
 jobs:
   cherry-pick:
     name: Cherry Pick Commits
     runs-on: ubuntu-latest
+    outputs:
+      pr_number: ${{ steps.create-pr.outputs.pull-request-number }}
+      pr_url: ${{ steps.create-pr.outputs.pull-request-url }}
+      feature_branch: ${{ steps.cherry-pick.outputs.feature_branch }}
+      cherry_picked: ${{ steps.cherry-pick.outputs.cherry_picked }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ env.TARGET_BRANCH }}
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -29,46 +61,48 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Validate target branch
+      - name: Validate inputs
         run: |
-          BRANCH="${{ github.ref_name }}"
+          if [ -z "$COMMIT_SHAS" ]; then
+            echo "❌ No commit SHA provided!"
+            exit 1
+          fi
+          
+          BRANCH="$TARGET_BRANCH"
           if [[ ! "$BRANCH" =~ ^desktop/release- ]]; then
-            echo "❌ Please run this workflow from a desktop/release-* branch!"
-            echo "   Current branch: $BRANCH"
-            echo ""
-            echo "💡 Go to Actions → Cherry Pick → Run workflow"
-            echo "   Then select your target release branch from 'Use workflow from'"
+            echo "❌ Target branch must be a desktop/release-* branch!"
+            echo "   Got: $BRANCH"
             exit 1
           fi
           echo "✅ Target branch: $BRANCH"
+          echo "✅ Commits to cherry-pick: $COMMIT_SHAS"
 
       - name: Create feature branch and cherry-pick
         id: cherry-pick
         run: |
-          TARGET_BRANCH="${{ github.ref_name }}"
-          COMMITS="${{ inputs.commit_shas }}"
+          TARGET="$TARGET_BRANCH"
+          COMMITS="$COMMIT_SHAS"
           
           # 生成唯一的 branch 名称
           TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-          FEATURE_BRANCH="cherry-pick/${TARGET_BRANCH#desktop/release-}/${TIMESTAMP}"
+          VERSION="${TARGET#desktop/release-}"
+          FEATURE_BRANCH="cherry-pick/${VERSION}/${TIMESTAMP}"
           
-          echo "🔀 Creating branch: $FEATURE_BRANCH"
+          echo "🔀 Creating branch: $FEATURE_BRANCH from $TARGET"
           git checkout -b "$FEATURE_BRANCH"
           
           # 获取 main 分支以便 cherry-pick
-          git fetch origin main
+          git fetch origin main --depth=100
           
           # Cherry-pick 每个 commit
           IFS=',' read -ra COMMIT_ARRAY <<< "$COMMITS"
           CHERRY_PICKED=""
           
           for SHA in "${COMMIT_ARRAY[@]}"; do
-            # 去除空格
-            SHA=$(echo "$SHA" | xargs)
+            SHA=$(echo "$SHA" | xargs)  # 去除空格
             echo "🍒 Cherry-picking: $SHA"
             
             if git cherry-pick "$SHA" --no-commit; then
-              # 获取原始 commit 信息
               COMMIT_MSG=$(git log -1 --format="%s" "$SHA" 2>/dev/null || echo "Cherry-picked $SHA")
               CHERRY_PICKED="${CHERRY_PICKED}- ${COMMIT_MSG} (\`${SHA:0:7}\`)\n"
               echo "✅ Successfully cherry-picked: $SHA"
@@ -80,17 +114,13 @@ jobs:
           done
           
           # Commit all cherry-picked changes
-          git commit -m "chore: cherry-pick commits for ${TARGET_BRANCH#desktop/}"
-          
-          # Push the branch
+          git commit -m "chore: cherry-pick commits for release-${VERSION}"
           git push origin "$FEATURE_BRANCH"
           
           echo "feature_branch=$FEATURE_BRANCH" >> $GITHUB_OUTPUT
           echo "cherry_picked<<EOF" >> $GITHUB_OUTPUT
           echo -e "$CHERRY_PICKED" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
-          
-          echo "✅ Branch pushed: $FEATURE_BRANCH"
 
       - name: Create Pull Request
         id: create-pr
@@ -98,17 +128,16 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: ${{ steps.cherry-pick.outputs.feature_branch }}
-          base: ${{ github.ref_name }}
-          title: "🍒 Cherry-pick to ${{ github.ref_name }}"
+          base: ${{ env.TARGET_BRANCH }}
+          title: "🍒 Cherry-pick to ${{ env.TARGET_BRANCH }}"
           body: |
             ## Cherry-picked Commits
             
             ${{ steps.cherry-pick.outputs.cherry_picked }}
             
             ---
-            
-            **Target Branch:** `${{ github.ref_name }}`
-            **Requested By:** @${{ github.actor }}
+            **Target Branch:** `${{ env.TARGET_BRANCH }}`
+            **Requested By:** ${{ env.TRIGGERED_BY }}
             
             _Auto-generated by Cherry-pick workflow_
           delete-branch: true
@@ -119,45 +148,36 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Target Branch | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Target Branch | \`${{ env.TARGET_BRANCH }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Feature Branch | \`${{ steps.cherry-pick.outputs.feature_branch }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Commits | \`${{ inputs.commit_shas }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commits | \`${{ env.COMMIT_SHAS }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| PR | #${{ steps.create-pr.outputs.pull-request-number }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Cherry-picked:" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.cherry-pick.outputs.cherry_picked }}" >> $GITHUB_STEP_SUMMARY
 
   notify-slack:
     name: Notify Slack
     needs: cherry-pick
-    if: success()
+    if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Send Slack notification
+      - name: Send success notification
+        if: needs.cherry-pick.result == 'success'
         run: |
-          cat > /tmp/slack_payload.json << 'EOF'
+          # 如果有 thread_ts，回复到 thread；否则发到 channel
+          THREAD_PARAM=""
+          if [ -n "$SLACK_THREAD_TS" ]; then
+            THREAD_PARAM="\"thread_ts\": \"$SLACK_THREAD_TS\","
+          fi
+
+          cat > /tmp/slack_payload.json << EOF
           {
+            $THREAD_PARAM
             "blocks": [
               {
                 "type": "section",
                 "text": {
                   "type": "mrkdwn",
-                  "text": "🍒 *Cherry-pick Complete*\n\nCommits have been cherry-picked to \`${{ github.ref_name }}\`\n\n*Commits:* \`${{ inputs.commit_shas }}\`\n*By:* ${{ github.actor }}"
+                  "text": "✅ *Cherry-pick Successful!*\n\n*Commits:* \`$COMMIT_SHAS\`\n*Target:* \`$TARGET_BRANCH\`\n*PR:* <${{ needs.cherry-pick.outputs.pr_url }}|#${{ needs.cherry-pick.outputs.pr_number }}>\n*By:* $TRIGGERED_BY"
                 }
-              },
-              {
-                "type": "actions",
-                "elements": [
-                  {
-                    "type": "button",
-                    "text": {
-                      "type": "plain_text",
-                      "text": "View PR",
-                      "emoji": true
-                    },
-                    "url": "${{ github.server_url }}/${{ github.repository }}/pulls"
-                  }
-                ]
               }
             ]
           }
@@ -167,3 +187,29 @@ jobs:
             --data @/tmp/slack_payload.json \
             ${{ secrets.SLACK_WEBHOOK_URL }}
 
+      - name: Send failure notification
+        if: needs.cherry-pick.result == 'failure'
+        run: |
+          THREAD_PARAM=""
+          if [ -n "$SLACK_THREAD_TS" ]; then
+            THREAD_PARAM="\"thread_ts\": \"$SLACK_THREAD_TS\","
+          fi
+
+          cat > /tmp/slack_payload.json << EOF
+          {
+            $THREAD_PARAM
+            "blocks": [
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "❌ *Cherry-pick Failed!*\n\n*Commits:* \`$COMMIT_SHAS\`\n*Target:* \`$TARGET_BRANCH\`\n\nPlease check the <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|workflow logs>."
+                }
+              }
+            ]
+          }
+          EOF
+          
+          curl -X POST -H 'Content-type: application/json' \
+            --data @/tmp/slack_payload.json \
+            ${{ secrets.SLACK_WEBHOOK_URL }}
