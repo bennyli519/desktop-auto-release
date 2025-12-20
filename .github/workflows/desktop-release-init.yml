@@ -12,16 +12,6 @@ on:
           - patch
           - minor
           - major
-      build_target:
-        description: 'Build target (after approval)'
-        required: true
-        type: choice
-        default: 'both'
-        options:
-          - staging
-          - production
-          - both
-          - none
 
 permissions:
   contents: write
@@ -117,7 +107,12 @@ jobs:
           echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Version | \`${CURRENT_VERSION}\` → \`${NEW_VERSION}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Branch | [\`desktop/release-${NEW_VERSION}\`](${REPO_URL}/tree/desktop/release-${NEW_VERSION}) |" >> $GITHUB_STEP_SUMMARY
-          echo "| Build Target | \`${{ inputs.build_target }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ⏳ Waiting for Build Approval" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Click **Review deployments** to approve:" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔨 **Staging** - approve to build staging" >> $GITHUB_STEP_SUMMARY
+          echo "- 🚀 **Production** - approve to build production" >> $GITHUB_STEP_SUMMARY
 
   notify-slack-init:
     name: Notify Slack
@@ -141,7 +136,7 @@ jobs:
                 "type": "section",
                 "text": {
                   "type": "mrkdwn",
-                  "text": "Hey team! 👋\n\n✅ Release branch created & version bumped.\n📦 \`$CURRENT_VERSION\` → \`$NEW_VERSION\`\n🎯 Build target: *${{ inputs.build_target }}*"
+                  "text": "Hey team! 👋\n\n✅ Release branch created & version bumped.\n📦 \`$CURRENT_VERSION\` → \`$NEW_VERSION\`"
                 }
               },
               {
@@ -155,6 +150,12 @@ jobs:
                 }
               },
               {
+                "type": "context",
+                "elements": [
+                  { "type": "mrkdwn", "text": "⏳ Workflow waiting for build approval (Staging / Production)" }
+                ]
+              },
+              {
                 "type": "actions",
                 "elements": [
                   {
@@ -164,7 +165,7 @@ jobs:
                   },
                   {
                     "type": "button",
-                    "text": { "type": "plain_text", "text": "▶️ Approve Builds", "emoji": true },
+                    "text": { "type": "plain_text", "text": "▶️ Review & Approve Builds", "emoji": true },
                     "style": "primary",
                     "url": "$REPO_URL/actions/runs/${{ github.run_id }}"
                   }
@@ -176,14 +177,13 @@ jobs:
           curl -X POST -H 'Content-type: application/json' --data @/tmp/slack_payload.json ${{ secrets.SLACK_WEBHOOK_URL }}
 
   # ============================================
-  # 🔨 STAGING BUILD (并行)
+  # 🔨 STAGING BUILD (等待独立审批)
   # ============================================
   build-staging:
     name: 🔨 Build Staging
     needs: [validate-and-calculate, create-branch-and-bump, notify-slack-init]
-    if: ${{ inputs.build_target == 'staging' || inputs.build_target == 'both' }}
     runs-on: ubuntu-latest
-    environment: staging
+    environment: staging  # ← 独立审批
     steps:
       - uses: actions/checkout@v4
         with:
@@ -198,15 +198,22 @@ jobs:
           gh workflow run desktop-app-publish-staging.yml --ref "$BRANCH"
           echo "✅ Staging build triggered!"
 
+      - name: Notify Slack
+        env:
+          NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"🔨 *Staging* build triggered for Desktop App $NEW_VERSION\n📥 <https://web.crabnebula.cloud/heidi-scribe/scribe-staging|Download when ready>\"}" \
+            ${{ secrets.SLACK_WEBHOOK_URL }}
+
   # ============================================
-  # 🚀 PRODUCTION BUILD (并行)
+  # 🚀 PRODUCTION BUILD (等待独立审批)
   # ============================================
   build-production:
     name: 🚀 Build Production
     needs: [validate-and-calculate, create-branch-and-bump, notify-slack-init]
-    if: ${{ inputs.build_target == 'production' || inputs.build_target == 'both' }}
     runs-on: ubuntu-latest
-    environment: production
+    environment: production  # ← 独立审批
     steps:
       - uses: actions/checkout@v4
         with:
@@ -221,33 +228,10 @@ jobs:
           gh workflow run desktop-app-publish-production.yml --ref "$BRANCH"
           echo "✅ Production build triggered!"
 
-  # ============================================
-  # 完成通知
-  # ============================================
-  notify-complete:
-    name: Notify Complete
-    needs: [validate-and-calculate, build-staging, build-production]
-    if: always() && (needs.build-staging.result == 'success' || needs.build-production.result == 'success')
-    runs-on: ubuntu-latest
-    env:
-      NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
-    steps:
-      - name: Send completion notification
+      - name: Notify Slack
+        env:
+          NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
         run: |
-          STAGING_STATUS=$([[ "${{ needs.build-staging.result }}" == "success" ]] && echo "✅" || ([[ "${{ needs.build-staging.result }}" == "skipped" ]] && echo "⏭️" || echo "❌"))
-          PROD_STATUS=$([[ "${{ needs.build-production.result }}" == "success" ]] && echo "✅" || ([[ "${{ needs.build-production.result }}" == "skipped" ]] && echo "⏭️" || echo "❌"))
-          
-          cat > /tmp/slack_payload.json << EOF
-          {
-            "blocks": [
-              {
-                "type": "section",
-                "text": {
-                  "type": "mrkdwn",
-                  "text": "🏗️ *Desktop App $NEW_VERSION Builds Triggered*\n\n${STAGING_STATUS} Staging | ${PROD_STATUS} Production\n\n📥 Download:\n• <https://web.crabnebula.cloud/heidi-scribe/scribe-staging|Staging>\n• <https://web.crabnebula.cloud/heidi-scribe/scribe|Production>"
-                }
-              }
-            ]
-          }
-          EOF
-          curl -X POST -H 'Content-type: application/json' --data @/tmp/slack_payload.json ${{ secrets.SLACK_WEBHOOK_URL }}
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"🚀 *Production* build triggered for Desktop App $NEW_VERSION\n📥 <https://web.crabnebula.cloud/heidi-scribe/scribe|Download when ready>\"}" \
+            ${{ secrets.SLACK_WEBHOOK_URL }}
