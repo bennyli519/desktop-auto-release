@@ -120,3 +120,62 @@ jobs:
           echo "1. Create a feature branch from \`desktop/release-${NEW_VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "2. Cherry-pick your fixes and bump version numbers in \`tauri.conf*.json\`" >> $GITHUB_STEP_SUMMARY
           echo "3. Create a PR to merge into \`desktop/release-${NEW_VERSION}\`" >> $GITHUB_STEP_SUMMARY
+
+  notify-slack:
+    name: Notify Slack
+    needs: [validate-and-calculate, create-branch]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Slack notification
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          CURRENT_VERSION: ${{ needs.validate-and-calculate.outputs.current_version }}
+          NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{
+              \"blocks\": [
+                {
+                  \"type\": \"header\",
+                  \"text\": {
+                    \"type\": \"plain_text\",
+                    \"text\": \"🚀 Desktop Release ${NEW_VERSION} Initialized\",
+                    \"emoji\": true
+                  }
+                },
+                {
+                  \"type\": \"section\",
+                  \"fields\": [
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*Version Bump:*\n\`${CURRENT_VERSION}\` → \`${NEW_VERSION}\` (${{ inputs.bump_type }})\"
+                    },
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*Created By:*\n@${{ github.actor }}\"
+                    }
+                  ]
+                },
+                {
+                  \"type\": \"section\",
+                  \"fields\": [
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*New Branch:*\n\`desktop/release-${NEW_VERSION}\`\"
+                    },
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*Base Branch:*\n\`${{ github.ref_name }}\`\"
+                    }
+                  ]
+                },
+                {
+                  \"type\": \"section\",
+                  \"text\": {
+                    \"type\": \"mrkdwn\",
+                    \"text\": \"*Next Steps:*\n1. Create feature branch from \`desktop/release-${NEW_VERSION}\`\n2. Cherry-pick fixes & bump versions\n3. Create PR to merge into release branch\"
+                  }
+                }
+              ]
+            }" \
+            $SLACK_WEBHOOK_URL
