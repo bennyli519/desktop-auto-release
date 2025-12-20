@@ -8,13 +8,13 @@ jobs:
   build:
     name: Build Production
     runs-on: ubuntu-latest
+    environment: production  # ← Approval gate!
     steps:
       - uses: actions/checkout@v4
       
-      - name: Mock build production
+      - name: Build production
         run: |
           echo "🚀 Building production..."
           echo "Version: $(jq -r '.version' src-tauri/tauri.conf.production.json)"
-          sleep 5
-          echo "✅ Production build complete (mock)"
-
+          sleep 3
+          echo "✅ Production build complete"

@@ -107,15 +107,9 @@ jobs:
           echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Version | \`${CURRENT_VERSION}\` → \`${NEW_VERSION}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Branch | [\`desktop/release-${NEW_VERSION}\`](${REPO_URL}/tree/desktop/release-${NEW_VERSION}) |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### ⏳ Waiting for Build Approval" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Click **Review deployments** to approve:" >> $GITHUB_STEP_SUMMARY
-          echo "- 🔨 **Staging** - approve to build staging" >> $GITHUB_STEP_SUMMARY
-          echo "- 🚀 **Production** - approve to build production" >> $GITHUB_STEP_SUMMARY
 
   notify-slack-init:
-    name: Notify Slack
+    name: Notify Slack (Release Created)
     needs: [validate-and-calculate, create-branch-and-bump]
     runs-on: ubuntu-latest
     env:
@@ -152,7 +146,7 @@ jobs:
               {
                 "type": "context",
                 "elements": [
-                  { "type": "mrkdwn", "text": "⏳ Workflow waiting for build approval (Staging / Production)" }
+                  { "type": "mrkdwn", "text": "⏳ Waiting for build approval (Staging / Production)" }
                 ]
               },
               {
@@ -177,61 +171,63 @@ jobs:
           curl -X POST -H 'Content-type: application/json' --data @/tmp/slack_payload.json ${{ secrets.SLACK_WEBHOOK_URL }}
 
   # ============================================
-  # 🔨 STAGING BUILD (等待独立审批)
+  # 🔨 STAGING BUILD
   # ============================================
   build-staging:
     name: 🔨 Build Staging
     needs: [validate-and-calculate, create-branch-and-bump, notify-slack-init]
+    uses: ./.github/workflows/desktop-app-publish-staging.yml
+    secrets: inherit
+    # Note: 在真实 repo 中, 把 environment 加到 desktop-app-publish-staging.yml 里
+
+  notify-staging-complete:
+    name: Notify Staging Complete
+    needs: [validate-and-calculate, build-staging]
+    if: always()
     runs-on: ubuntu-latest
-    environment: staging  # ← 独立审批
+    env:
+      NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
+      BUILD_RESULT: ${{ needs.build-staging.result }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.create-branch-and-bump.outputs.release_branch }}
-
-      - name: Trigger Staging Build
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BRANCH: ${{ needs.create-branch-and-bump.outputs.release_branch }}
+      - name: Send Slack notification
         run: |
-          echo "🔨 Triggering staging build on $BRANCH..."
-          gh workflow run desktop-app-publish-staging.yml --ref "$BRANCH"
-          echo "✅ Staging build triggered!"
-
-      - name: Notify Slack
-        env:
-          NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
-        run: |
+          if [ "$BUILD_RESULT" == "success" ]; then
+            STATUS="✅ Staging build *successful*"
+          else
+            STATUS="❌ Staging build *failed*"
+          fi
+          
           curl -X POST -H 'Content-type: application/json' \
-            --data "{\"text\":\"🔨 *Staging* build triggered for Desktop App $NEW_VERSION\n📥 <https://web.crabnebula.cloud/heidi-scribe/scribe-staging|Download when ready>\"}" \
+            --data "{\"text\":\"🔨 Desktop App $NEW_VERSION\n$STATUS\n📥 <https://web.crabnebula.cloud/heidi-scribe/scribe-staging|Download Staging>\"}" \
             ${{ secrets.SLACK_WEBHOOK_URL }}
 
   # ============================================
-  # 🚀 PRODUCTION BUILD (等待独立审批)
+  # 🚀 PRODUCTION BUILD
   # ============================================
   build-production:
     name: 🚀 Build Production
     needs: [validate-and-calculate, create-branch-and-bump, notify-slack-init]
+    uses: ./.github/workflows/desktop-app-publish-production.yml
+    secrets: inherit
+    # Note: 在真实 repo 中, 把 environment 加到 desktop-app-publish-production.yml 里
+
+  notify-production-complete:
+    name: Notify Production Complete
+    needs: [validate-and-calculate, build-production]
+    if: always()
     runs-on: ubuntu-latest
-    environment: production  # ← 独立审批
+    env:
+      NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
+      BUILD_RESULT: ${{ needs.build-production.result }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.create-branch-and-bump.outputs.release_branch }}
-
-      - name: Trigger Production Build
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BRANCH: ${{ needs.create-branch-and-bump.outputs.release_branch }}
+      - name: Send Slack notification
         run: |
-          echo "🚀 Triggering production build on $BRANCH..."
-          gh workflow run desktop-app-publish-production.yml --ref "$BRANCH"
-          echo "✅ Production build triggered!"
-
-      - name: Notify Slack
-        env:
-          NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
-        run: |
+          if [ "$BUILD_RESULT" == "success" ]; then
+            STATUS="✅ Production build *successful*"
+          else
+            STATUS="❌ Production build *failed*"
+          fi
+          
           curl -X POST -H 'Content-type: application/json' \
-            --data "{\"text\":\"🚀 *Production* build triggered for Desktop App $NEW_VERSION\n📥 <https://web.crabnebula.cloud/heidi-scribe/scribe|Download when ready>\"}" \
+            --data "{\"text\":\"🚀 Desktop App $NEW_VERSION\n$STATUS\n📥 <https://web.crabnebula.cloud/heidi-scribe/scribe|Download Production>\"}" \
             ${{ secrets.SLACK_WEBHOOK_URL }}

@@ -8,13 +8,13 @@ jobs:
   build:
     name: Build Staging
     runs-on: ubuntu-latest
+    environment: staging  # ← Approval gate!
     steps:
       - uses: actions/checkout@v4
       
-      - name: Mock build staging
+      - name: Build staging
         run: |
           echo "🔨 Building staging..."
           echo "Version: $(jq -r '.version' src-tauri/tauri.conf.staging.json)"
-          sleep 5
-          echo "✅ Staging build complete (mock)"
-
+          sleep 3
+          echo "✅ Staging build complete"
