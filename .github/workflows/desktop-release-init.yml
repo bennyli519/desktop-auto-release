@@ -12,6 +12,16 @@ on:
           - patch
           - minor
           - major
+      build_target:
+        description: 'Build target (after approval)'
+        required: true
+        type: choice
+        default: 'both'
+        options:
+          - staging
+          - production
+          - both
+          - none
 
 permissions:
   contents: write
@@ -35,43 +45,30 @@ jobs:
           ref: ${{ github.ref_name }}
           fetch-depth: 0
 
-      - name: Show base branch
-        run: |
-          echo "📌 Base branch: ${{ github.ref_name }}"
-
       - name: Calculate new version
         id: version
         run: |
           CURRENT=$(jq -r '.version' src-tauri/tauri.conf.json)
-          echo "📦 Current version: $CURRENT"
           echo "current=$CURRENT" >> $GITHUB_OUTPUT
           
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
           
           case "${{ inputs.bump_type }}" in
-            major)
-              NEW="$((MAJOR + 1)).0.0"
-              ;;
-            minor)
-              NEW="${MAJOR}.$((MINOR + 1)).0"
-              ;;
-            patch)
-              NEW="${MAJOR}.${MINOR}.$((PATCH + 1))"
-              ;;
+            major) NEW="$((MAJOR + 1)).0.0" ;;
+            minor) NEW="${MAJOR}.$((MINOR + 1)).0" ;;
+            patch) NEW="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
           esac
           
-          echo "🆕 New version: $NEW"
           echo "new=$NEW" >> $GITHUB_OUTPUT
+          echo "📦 Version: $CURRENT → $NEW"
 
       - name: Check if release branch already exists
         run: |
-          NEW_VERSION="${{ steps.version.outputs.new }}"
-          BRANCH="desktop/release-${NEW_VERSION}"
+          BRANCH="desktop/release-${{ steps.version.outputs.new }}"
           if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null 2>&1; then
             echo "❌ Branch '$BRANCH' already exists!"
             exit 1
           fi
-          echo "✅ Branch '$BRANCH' does not exist yet"
 
   create-branch-and-bump:
     name: Create Branch & Bump Version
@@ -81,7 +78,6 @@ jobs:
       release_branch: ${{ steps.create.outputs.branch }}
     env:
       NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
-      CURRENT_VERSION: ${{ needs.validate-and-calculate.outputs.current_version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -100,89 +96,53 @@ jobs:
           BRANCH="desktop/release-${NEW_VERSION}"
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
           
-          echo "🔀 Creating branch '$BRANCH'..."
           git checkout -b "$BRANCH"
           
-          echo "📝 Bumping version to $NEW_VERSION..."
           for file in src-tauri/tauri.conf.json src-tauri/tauri.conf.staging.json src-tauri/tauri.conf.production.json; do
-            if [ -f "$file" ]; then
-              jq --arg v "$NEW_VERSION" '.version = $v' "$file" > tmp.json && mv tmp.json "$file"
-            fi
+            [ -f "$file" ] && jq --arg v "$NEW_VERSION" '.version = $v' "$file" > tmp.json && mv tmp.json "$file"
           done
           
           git add -A
           git commit -m "chore: bump version to ${NEW_VERSION}"
           git push origin "$BRANCH"
-          
-          echo "✅ Branch '$BRANCH' created with version ${NEW_VERSION}"
 
       - name: Summary
         env:
+          CURRENT_VERSION: ${{ needs.validate-and-calculate.outputs.current_version }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
-          echo "## 🚀 Desktop Release ${NEW_VERSION} Initialized" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 Desktop Release ${NEW_VERSION}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Version | \`${CURRENT_VERSION}\` → \`${NEW_VERSION}\` (${{ inputs.bump_type }}) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | \`${CURRENT_VERSION}\` → \`${NEW_VERSION}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Branch | [\`desktop/release-${NEW_VERSION}\`](${REPO_URL}/tree/desktop/release-${NEW_VERSION}) |" >> $GITHUB_STEP_SUMMARY
-          echo "| Created By | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "---" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### ⏳ Waiting for Builds" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "The workflow will wait for approval before building:" >> $GITHUB_STEP_SUMMARY
-          echo "1. **Staging Build** - Click 'Review deployments' to approve" >> $GITHUB_STEP_SUMMARY
-          echo "2. **Production Build** - Click 'Review deployments' to approve" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Target | \`${{ inputs.build_target }}\` |" >> $GITHUB_STEP_SUMMARY
 
   notify-slack-init:
-    name: Notify Slack (Init)
+    name: Notify Slack
     needs: [validate-and-calculate, create-branch-and-bump]
     runs-on: ubuntu-latest
     env:
-      CURRENT_VERSION: ${{ needs.validate-and-calculate.outputs.current_version }}
       NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
-      BASE_BRANCH: ${{ github.ref_name }}
+      CURRENT_VERSION: ${{ needs.validate-and-calculate.outputs.current_version }}
       REPO_URL: ${{ github.server_url }}/${{ github.repository }}
-      ACTOR: ${{ github.actor }}
-      BUMP_TYPE: ${{ inputs.bump_type }}
     steps:
       - name: Send Slack notification
         run: |
-          case "$BUMP_TYPE" in
-            major) BUMP_DESC="This is a *major version* with breaking changes." ;;
-            minor) BUMP_DESC="This is a *minor version* with new features." ;;
-            patch) BUMP_DESC="This is a *patch version* for bug fixes." ;;
-          esac
-
           cat > /tmp/slack_payload.json << EOF
           {
             "blocks": [
               {
                 "type": "header",
-                "text": {
-                  "type": "plain_text",
-                  "text": "🚀 Desktop App $NEW_VERSION Release Initiated",
-                  "emoji": true
-                }
+                "text": { "type": "plain_text", "text": "🚀 Desktop App $NEW_VERSION Release Initiated", "emoji": true }
               },
               {
                 "type": "section",
                 "text": {
                   "type": "mrkdwn",
-                  "text": "Hey team! 👋\n\nA new release branch has been created for Desktop App *$NEW_VERSION*.\n\n$BUMP_DESC\n\n✅ Version already bumped in \`tauri.conf*.json\` files."
+                  "text": "Hey team! 👋\n\n✅ Release branch created & version bumped.\n📦 \`$CURRENT_VERSION\` → \`$NEW_VERSION\`\n🎯 Build target: *${{ inputs.build_target }}*"
                 }
-              },
-              {
-                "type": "divider"
-              },
-              {
-                "type": "section",
-                "fields": [
-                  { "type": "mrkdwn", "text": "*Branch:*\n\`desktop/release-$NEW_VERSION\`" },
-                  { "type": "mrkdwn", "text": "*Version:*\n\`$CURRENT_VERSION\` → \`$NEW_VERSION\`" }
-                ]
               },
               {
                 "type": "divider"
@@ -193,12 +153,6 @@ jobs:
                   "type": "mrkdwn",
                   "text": "📢 *Need to include your fix?*\n\`\`\`git fetch origin\ngit checkout -b my-fix desktop/release-$NEW_VERSION\ngit cherry-pick <commit-sha>\ngit push origin my-fix\`\`\`"
                 }
-              },
-              {
-                "type": "context",
-                "elements": [
-                  { "type": "mrkdwn", "text": "⏳ Workflow is waiting for build approval in GitHub Actions" }
-                ]
               },
               {
                 "type": "actions",
@@ -219,19 +173,17 @@ jobs:
             ]
           }
           EOF
-
-          curl -X POST -H 'Content-type: application/json' \
-            --data @/tmp/slack_payload.json \
-            ${{ secrets.SLACK_WEBHOOK_URL }}
+          curl -X POST -H 'Content-type: application/json' --data @/tmp/slack_payload.json ${{ secrets.SLACK_WEBHOOK_URL }}
 
   # ============================================
-  # 🔨 STAGING BUILD - Requires Approval
+  # 🔨 STAGING BUILD (并行)
   # ============================================
   build-staging:
     name: 🔨 Build Staging
     needs: [validate-and-calculate, create-branch-and-bump, notify-slack-init]
+    if: ${{ inputs.build_target == 'staging' || inputs.build_target == 'both' }}
     runs-on: ubuntu-latest
-    environment: staging  # ⬅️ This creates an approval gate!
+    environment: staging
     steps:
       - uses: actions/checkout@v4
         with:
@@ -240,28 +192,21 @@ jobs:
       - name: Trigger Staging Build
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ needs.create-branch-and-bump.outputs.release_branch }}
         run: |
-          echo "🔨 Triggering staging build..."
-          gh workflow run desktop-app-publish-staging.yml \
-            --ref ${{ needs.create-branch-and-bump.outputs.release_branch }}
+          echo "🔨 Triggering staging build on $BRANCH..."
+          gh workflow run desktop-app-publish-staging.yml --ref "$BRANCH"
           echo "✅ Staging build triggered!"
 
-      - name: Summary
-        run: |
-          echo "## 🔨 Staging Build Triggered" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Branch: \`${{ needs.create-branch-and-bump.outputs.release_branch }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "[View Staging Build](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/workflows/desktop-app-publish-staging.yml)" >> $GITHUB_STEP_SUMMARY
-
   # ============================================
-  # 🚀 PRODUCTION BUILD - Requires Approval
+  # 🚀 PRODUCTION BUILD (并行)
   # ============================================
   build-production:
     name: 🚀 Build Production
-    needs: [validate-and-calculate, create-branch-and-bump, build-staging]
+    needs: [validate-and-calculate, create-branch-and-bump, notify-slack-init]
+    if: ${{ inputs.build_target == 'production' || inputs.build_target == 'both' }}
     runs-on: ubuntu-latest
-    environment: production  # ⬅️ This creates an approval gate!
+    environment: production
     steps:
       - uses: actions/checkout@v4
         with:
@@ -270,30 +215,28 @@ jobs:
       - name: Trigger Production Build
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ needs.create-branch-and-bump.outputs.release_branch }}
         run: |
-          echo "🚀 Triggering production build..."
-          gh workflow run desktop-app-publish-production.yml \
-            --ref ${{ needs.create-branch-and-bump.outputs.release_branch }}
+          echo "🚀 Triggering production build on $BRANCH..."
+          gh workflow run desktop-app-publish-production.yml --ref "$BRANCH"
           echo "✅ Production build triggered!"
 
-      - name: Summary
-        run: |
-          echo "## 🚀 Production Build Triggered" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Branch: \`${{ needs.create-branch-and-bump.outputs.release_branch }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "[View Production Build](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/workflows/desktop-app-publish-production.yml)" >> $GITHUB_STEP_SUMMARY
-
-  notify-slack-complete:
-    name: Notify Slack (Complete)
+  # ============================================
+  # 完成通知
+  # ============================================
+  notify-complete:
+    name: Notify Complete
     needs: [validate-and-calculate, build-staging, build-production]
-    if: always()
+    if: always() && (needs.build-staging.result == 'success' || needs.build-production.result == 'success')
     runs-on: ubuntu-latest
     env:
       NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
     steps:
       - name: Send completion notification
         run: |
+          STAGING_STATUS=$([[ "${{ needs.build-staging.result }}" == "success" ]] && echo "✅" || ([[ "${{ needs.build-staging.result }}" == "skipped" ]] && echo "⏭️" || echo "❌"))
+          PROD_STATUS=$([[ "${{ needs.build-production.result }}" == "success" ]] && echo "✅" || ([[ "${{ needs.build-production.result }}" == "skipped" ]] && echo "⏭️" || echo "❌"))
+          
           cat > /tmp/slack_payload.json << EOF
           {
             "blocks": [
@@ -301,13 +244,10 @@ jobs:
                 "type": "section",
                 "text": {
                   "type": "mrkdwn",
-                  "text": "✅ *Desktop App $NEW_VERSION builds triggered!*\n\n📥 Download & verify installers:\n• <https://web.crabnebula.cloud/heidi-scribe/scribe-staging|Staging>\n• <https://web.crabnebula.cloud/heidi-scribe/scribe|Production>"
+                  "text": "🏗️ *Desktop App $NEW_VERSION Builds Triggered*\n\n${STAGING_STATUS} Staging | ${PROD_STATUS} Production\n\n📥 Download:\n• <https://web.crabnebula.cloud/heidi-scribe/scribe-staging|Staging>\n• <https://web.crabnebula.cloud/heidi-scribe/scribe|Production>"
                 }
               }
             ]
           }
           EOF
-
-          curl -X POST -H 'Content-type: application/json' \
-            --data @/tmp/slack_payload.json \
-            ${{ secrets.SLACK_WEBHOOK_URL }}
+          curl -X POST -H 'Content-type: application/json' --data @/tmp/slack_payload.json ${{ secrets.SLACK_WEBHOOK_URL }}
