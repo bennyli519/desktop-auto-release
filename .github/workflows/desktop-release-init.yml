@@ -12,6 +12,15 @@ on:
           - patch
           - minor
           - major
+      release_description:
+        description: 'Release description (what changed in this version)'
+        required: true
+        type: string
+        default: 'Bug fixes and improvements'
+      release_notes_url:
+        description: 'Release notes URL (Notion link)'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -29,6 +38,7 @@ jobs:
       base_branch: ${{ github.ref_name }}
       current_version: ${{ steps.version.outputs.current }}
       new_version: ${{ steps.version.outputs.new }}
+      release_date: ${{ steps.version.outputs.date }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,6 +60,7 @@ jobs:
           esac
           
           echo "new=$NEW" >> $GITHUB_OUTPUT
+          echo "date=$(date +'%d/%m/%Y')" >> $GITHUB_OUTPUT
           echo "📦 Version: $CURRENT → $NEW"
 
       - name: Check if release branch already exists
@@ -107,6 +118,7 @@ jobs:
           echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Version | \`${CURRENT_VERSION}\` → \`${NEW_VERSION}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Branch | [\`desktop/release-${NEW_VERSION}\`](${REPO_URL}/tree/desktop/release-${NEW_VERSION}) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Description | ${{ inputs.release_description }} |" >> $GITHUB_STEP_SUMMARY
 
   notify-slack-init:
     name: Notify Slack (Release Created)
@@ -130,7 +142,7 @@ jobs:
                 "type": "section",
                 "text": {
                   "type": "mrkdwn",
-                  "text": "Hey team! 👋\n\n✅ Release branch created & version bumped.\n📦 \`$CURRENT_VERSION\` → \`$NEW_VERSION\`"
+                  "text": "Hey team! 👋\n\n✅ Release branch created & version bumped.\n📦 \`$CURRENT_VERSION\` → \`$NEW_VERSION\`\n\n📝 *Changes:* ${{ inputs.release_description }}"
                 }
               },
               {
@@ -178,7 +190,6 @@ jobs:
     needs: [validate-and-calculate, create-branch-and-bump, notify-slack-init]
     uses: ./.github/workflows/desktop-app-publish-staging.yml
     secrets: inherit
-    # Note: 在真实 repo 中, 把 environment 加到 desktop-app-publish-staging.yml 里
 
   notify-staging-complete:
     name: Notify Staging Complete
@@ -192,13 +203,15 @@ jobs:
       - name: Send Slack notification
         run: |
           if [ "$BUILD_RESULT" == "success" ]; then
-            STATUS="✅ Staging build *successful*"
+            STATUS="✅"
+            MSG="Staging build successful!"
           else
-            STATUS="❌ Staging build *failed*"
+            STATUS="❌"
+            MSG="Staging build failed"
           fi
           
           curl -X POST -H 'Content-type: application/json' \
-            --data "{\"text\":\"🔨 Desktop App $NEW_VERSION\n$STATUS\n📥 <https://web.crabnebula.cloud/heidi-scribe/scribe-staging|Download Staging>\"}" \
+            --data "{\"text\":\"$STATUS *Desktop App v$NEW_VERSION* - Staging\n$MSG\n📥 <https://web.crabnebula.cloud/heidi-scribe/scribe-staging|Download Staging Installer>\"}" \
             ${{ secrets.SLACK_WEBHOOK_URL }}
 
   # ============================================
@@ -209,7 +222,6 @@ jobs:
     needs: [validate-and-calculate, create-branch-and-bump, notify-slack-init]
     uses: ./.github/workflows/desktop-app-publish-production.yml
     secrets: inherit
-    # Note: 在真实 repo 中, 把 environment 加到 desktop-app-publish-production.yml 里
 
   notify-production-complete:
     name: Notify Production Complete
@@ -218,16 +230,54 @@ jobs:
     runs-on: ubuntu-latest
     env:
       NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
+      RELEASE_DATE: ${{ needs.validate-and-calculate.outputs.release_date }}
       BUILD_RESULT: ${{ needs.build-production.result }}
+      RELEASE_DESC: ${{ inputs.release_description }}
+      RELEASE_NOTES_URL: ${{ inputs.release_notes_url }}
     steps:
       - name: Send Slack notification
         run: |
           if [ "$BUILD_RESULT" == "success" ]; then
-            STATUS="✅ Production build *successful*"
+            # 成功 - 发布公告
+            NOTES_LINK=""
+            if [ -n "$RELEASE_NOTES_URL" ]; then
+              NOTES_LINK="\n\n📋 <$RELEASE_NOTES_URL|View full release notes>"
+            fi
+            
+            cat > /tmp/slack_payload.json << EOF
+          {
+            "blocks": [
+              {
+                "type": "header",
+                "text": { "type": "plain_text", "text": "🚀 Desktop App Release v$NEW_VERSION - $RELEASE_DATE 🚀", "emoji": true }
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "We're excited to announce that Desktop App *v$NEW_VERSION* has just been released! 🎉\n\n$RELEASE_DESC$NOTES_LINK"
+                }
+              },
+              {
+                "type": "divider"
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "📥 *Download:*\n• <https://web.crabnebula.cloud/heidi-scribe/scribe|Production Installer>"
+                }
+              }
+            ]
+          }
+          EOF
           else
-            STATUS="❌ Production build *failed*"
+            # 失败
+            cat > /tmp/slack_payload.json << EOF
+          {
+            "text": "❌ *Desktop App v$NEW_VERSION* - Production build failed!\n\nPlease check the workflow logs."
+          }
+          EOF
           fi
           
-          curl -X POST -H 'Content-type: application/json' \
-            --data "{\"text\":\"🚀 Desktop App $NEW_VERSION\n$STATUS\n📥 <https://web.crabnebula.cloud/heidi-scribe/scribe|Download Production>\"}" \
-            ${{ secrets.SLACK_WEBHOOK_URL }}
+          curl -X POST -H 'Content-type: application/json' --data @/tmp/slack_payload.json ${{ secrets.SLACK_WEBHOOK_URL }}
