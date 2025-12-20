@@ -1,0 +1,191 @@
+name: Desktop Release - Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to build'
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+          - both
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  validate:
+    name: Validate Release Branch
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Validate branch
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          if [[ ! "$BRANCH" =~ ^desktop/release- ]]; then
+            echo "❌ This workflow must be run from a desktop/release-* branch!"
+            echo "   Current branch: $BRANCH"
+            echo ""
+            echo "💡 Go to Actions → Desktop Release - Build"
+            echo "   Select your release branch from 'Use workflow from' dropdown"
+            exit 1
+          fi
+          echo "✅ Running on release branch: $BRANCH"
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(jq -r '.version' src-tauri/tauri.conf.json)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "📦 Version: $VERSION"
+
+  build-staging:
+    name: 🔨 Build Staging
+    needs: validate
+    if: ${{ inputs.environment == 'staging' || inputs.environment == 'both' }}
+    uses: ./.github/workflows/desktop-app-publish-staging.yml
+    secrets: inherit
+
+  build-production:
+    name: 🚀 Build Production
+    needs: validate
+    if: ${{ inputs.environment == 'production' || inputs.environment == 'both' }}
+    uses: ./.github/workflows/desktop-app-publish-production.yml
+    secrets: inherit
+
+  summary:
+    name: Summary
+    needs: [validate, build-staging, build-production]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate Summary
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          STAGING_RESULT: ${{ needs.build-staging.result }}
+          PRODUCTION_RESULT: ${{ needs.build-production.result }}
+        run: |
+          echo "## 🏗️ Desktop Release Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | \`${VERSION}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | \`${{ inputs.environment }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Triggered By | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Build Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ inputs.environment }}" == "staging" ] || [ "${{ inputs.environment }}" == "both" ]; then
+            if [ "$STAGING_RESULT" == "success" ]; then
+              echo "✅ **Staging**: Build successful" >> $GITHUB_STEP_SUMMARY
+            elif [ "$STAGING_RESULT" == "skipped" ]; then
+              echo "⏭️ **Staging**: Skipped" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ **Staging**: Build failed" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+          
+          if [ "${{ inputs.environment }}" == "production" ] || [ "${{ inputs.environment }}" == "both" ]; then
+            if [ "$PRODUCTION_RESULT" == "success" ]; then
+              echo "✅ **Production**: Build successful" >> $GITHUB_STEP_SUMMARY
+            elif [ "$PRODUCTION_RESULT" == "skipped" ]; then
+              echo "⏭️ **Production**: Skipped" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ **Production**: Build failed" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📥 Download Installers" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- [CrabNebula - Staging](https://web.crabnebula.cloud/heidi-scribe/scribe-staging)" >> $GITHUB_STEP_SUMMARY
+          echo "- [CrabNebula - Production](https://web.crabnebula.cloud/heidi-scribe/scribe)" >> $GITHUB_STEP_SUMMARY
+
+  notify-slack:
+    name: Notify Slack
+    needs: [validate, build-staging, build-production]
+    if: always()
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+      STAGING_RESULT: ${{ needs.build-staging.result }}
+      PRODUCTION_RESULT: ${{ needs.build-production.result }}
+    steps:
+      - name: Send Slack notification
+        run: |
+          # 确定状态 emoji
+          if [ "${{ inputs.environment }}" == "staging" ]; then
+            if [ "$STAGING_RESULT" == "success" ]; then
+              STATUS="✅ Staging build successful"
+            else
+              STATUS="❌ Staging build failed"
+            fi
+          elif [ "${{ inputs.environment }}" == "production" ]; then
+            if [ "$PRODUCTION_RESULT" == "success" ]; then
+              STATUS="✅ Production build successful"
+            else
+              STATUS="❌ Production build failed"
+            fi
+          else
+            STAGING_EMOJI=$([[ "$STAGING_RESULT" == "success" ]] && echo "✅" || echo "❌")
+            PRODUCTION_EMOJI=$([[ "$PRODUCTION_RESULT" == "success" ]] && echo "✅" || echo "❌")
+            STATUS="${STAGING_EMOJI} Staging | ${PRODUCTION_EMOJI} Production"
+          fi
+
+          cat > /tmp/slack_payload.json << EOF
+          {
+            "blocks": [
+              {
+                "type": "header",
+                "text": {
+                  "type": "plain_text",
+                  "text": "🏗️ Desktop App $VERSION Build Complete",
+                  "emoji": true
+                }
+              },
+              {
+                "type": "section",
+                "fields": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Status:*\n$STATUS"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Branch:*\n\`${{ github.ref_name }}\`"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Version:*\n\`$VERSION\`"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Triggered By:*\n${{ github.actor }}"
+                  }
+                ]
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "📥 *Download & Verify:*\n• <https://web.crabnebula.cloud/heidi-scribe/scribe-staging|Staging Installers>\n• <https://web.crabnebula.cloud/heidi-scribe/scribe|Production Installers>"
+                }
+              }
+            ]
+          }
+          EOF
+
+          curl -X POST -H 'Content-type: application/json' \
+            --data @/tmp/slack_payload.json \
+            ${{ secrets.SLACK_WEBHOOK_URL }}
+

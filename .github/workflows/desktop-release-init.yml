@@ -128,13 +128,15 @@ jobs:
           echo "✅ Branch '$BRANCH' created and pushed with version ${NEW_VERSION}"
 
       - name: Summary
+        env:
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
           echo "## 🚀 Desktop Release ${NEW_VERSION} Initialized" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Version Bump | \`${CURRENT_VERSION}\` → \`${NEW_VERSION}\` (${{ inputs.bump_type }}) |" >> $GITHUB_STEP_SUMMARY
-          echo "| New Branch | \`desktop/release-${NEW_VERSION}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| New Branch | [\`desktop/release-${NEW_VERSION}\`](${REPO_URL}/tree/desktop/release-${NEW_VERSION}) |" >> $GITHUB_STEP_SUMMARY
           echo "| Base Branch | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Created By | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -143,10 +145,16 @@ jobs:
           echo "- \`src-tauri/tauri.conf.staging.json\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`src-tauri/tauri.conf.production.json\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📋 Next Steps" >> $GITHUB_STEP_SUMMARY
-          echo "1. Cherry-pick your fixes to \`desktop/release-${NEW_VERSION}\`" >> $GITHUB_STEP_SUMMARY
-          echo "2. Create PR and get it reviewed" >> $GITHUB_STEP_SUMMARY
-          echo "3. Merge and trigger build" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🏗️ Trigger Build (after cherry-picks are merged)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | Action |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Staging | [▶️ **Run Staging Build**](${REPO_URL}/actions/workflows/desktop-app-publish-staging.yml) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Production | [▶️ **Run Production Build**](${REPO_URL}/actions/workflows/desktop-app-publish-production.yml) |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> 💡 Click the link, then select \`desktop/release-${NEW_VERSION}\` branch and click **Run workflow**" >> $GITHUB_STEP_SUMMARY
 
   notify-slack:
     name: Notify Slack
