@@ -76,10 +76,13 @@ jobs:
           fi
           echo "✅ Branch '$BRANCH' does not exist yet"
 
-  create-branch:
-    name: Create Release Branch
+  create-branch-and-bump:
+    name: Create Branch & Bump Version
     needs: validate-and-calculate
     runs-on: ubuntu-latest
+    env:
+      NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
+      CURRENT_VERSION: ${{ needs.validate-and-calculate.outputs.current_version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -93,19 +96,38 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Create release branch
-        env:
-          NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
         run: |
           BRANCH="desktop/release-${NEW_VERSION}"
           echo "🔀 Creating branch '$BRANCH' from '${{ github.ref_name }}'..."
           git checkout -b "$BRANCH"
+
+      - name: Bump version in tauri config files
+        run: |
+          echo "📝 Bumping version from $CURRENT_VERSION to $NEW_VERSION"
+          
+          # 更新所有 tauri config 文件
+          for file in src-tauri/tauri.conf.json src-tauri/tauri.conf.staging.json src-tauri/tauri.conf.production.json; do
+            if [ -f "$file" ]; then
+              echo "  Updating $file..."
+              jq --arg v "$NEW_VERSION" '.version = $v' "$file" > tmp.json && mv tmp.json "$file"
+            else
+              echo "  ⚠️ File not found: $file (skipping)"
+            fi
+          done
+          
+          echo "✅ Version bumped in all config files"
+
+      - name: Commit and push
+        run: |
+          BRANCH="desktop/release-${NEW_VERSION}"
+          
+          git add -A
+          git commit -m "chore: bump version to ${NEW_VERSION}"
           git push origin "$BRANCH"
-          echo "✅ Branch '$BRANCH' created and pushed"
+          
+          echo "✅ Branch '$BRANCH' created and pushed with version ${NEW_VERSION}"
 
       - name: Summary
-        env:
-          CURRENT_VERSION: ${{ needs.validate-and-calculate.outputs.current_version }}
-          NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
         run: |
           echo "## 🚀 Desktop Release ${NEW_VERSION} Initialized" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -116,14 +138,19 @@ jobs:
           echo "| Base Branch | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Created By | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### ✅ Next Steps" >> $GITHUB_STEP_SUMMARY
-          echo "1. Create a feature branch from \`desktop/release-${NEW_VERSION}\`" >> $GITHUB_STEP_SUMMARY
-          echo "2. Cherry-pick your fixes and bump version numbers in \`tauri.conf*.json\`" >> $GITHUB_STEP_SUMMARY
-          echo "3. Create a PR to merge into \`desktop/release-${NEW_VERSION}\`" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ Files Updated" >> $GITHUB_STEP_SUMMARY
+          echo "- \`src-tauri/tauri.conf.json\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`src-tauri/tauri.conf.staging.json\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`src-tauri/tauri.conf.production.json\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Cherry-pick your fixes to \`desktop/release-${NEW_VERSION}\`" >> $GITHUB_STEP_SUMMARY
+          echo "2. Create PR and get it reviewed" >> $GITHUB_STEP_SUMMARY
+          echo "3. Merge and trigger build" >> $GITHUB_STEP_SUMMARY
 
   notify-slack:
     name: Notify Slack
-    needs: [validate-and-calculate, create-branch]
+    needs: [validate-and-calculate, create-branch-and-bump]
     runs-on: ubuntu-latest
     env:
       CURRENT_VERSION: ${{ needs.validate-and-calculate.outputs.current_version }}
@@ -190,6 +217,13 @@ jobs:
                     "text": "*Created By:*\n$ACTOR"
                   }
                 ]
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "✅ *Version already bumped* in \`tauri.conf*.json\` files."
+                }
               },
               {
                 "type": "divider"
