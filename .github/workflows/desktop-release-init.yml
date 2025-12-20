@@ -3,18 +3,9 @@ name: Desktop Release - Initialize
 on:
   workflow_dispatch:
     inputs:
-      list_branches_only:
-        description: '🔍 只列出可用的 release branches（不创建）'
-        required: false
-        type: boolean
-        default: false
-      base_branch:
-        description: 'Base branch（先勾选上面选项查看可用列表）'
-        required: false
-        type: string
       bump_type:
         description: 'Version bump type'
-        required: false
+        required: true
         type: choice
         default: 'patch'
         options:
@@ -30,88 +21,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  list-branches:
-    name: List Available Branches
-    if: ${{ inputs.list_branches_only == true }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: List all desktop release branches
-        run: |
-          echo "## 📋 Available Desktop Release Branches" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Branch | Version |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|---------|" >> $GITHUB_STEP_SUMMARY
-          
-          git ls-remote --heads origin 'desktop/release-*' | awk '{print $2}' | sed 's|refs/heads/||' | sort -V -r | while read branch; do
-            version=$(echo "$branch" | sed 's|desktop/release-||')
-            echo "| \`$branch\` | $version |" >> $GITHUB_STEP_SUMMARY
-          done
-          
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📝 Next Steps" >> $GITHUB_STEP_SUMMARY
-          echo "1. 复制上面你要用的 branch 名称" >> $GITHUB_STEP_SUMMARY
-          echo "2. 重新运行 workflow，取消勾选 '只列出可用的 release branches'" >> $GITHUB_STEP_SUMMARY
-          echo "3. 在 'Base branch' 输入框粘贴 branch 名称" >> $GITHUB_STEP_SUMMARY
-          echo "4. 选择 bump type (patch/minor/major)" >> $GITHUB_STEP_SUMMARY
-          
-          echo ""
-          echo "📋 Available desktop release branches:"
-          git ls-remote --heads origin 'desktop/release-*' | awk '{print $2}' | sed 's|refs/heads/||' | sort -V -r | head -10
-          echo ""
-          echo "📋 Other common branches:"
-          echo "  - main"
-
   validate-and-calculate:
     name: Validate & Calculate Version
-    if: ${{ inputs.list_branches_only == false || inputs.list_branches_only == '' }}
     runs-on: ubuntu-latest
     outputs:
-      base_branch: ${{ steps.validate.outputs.base_branch }}
+      base_branch: ${{ github.ref_name }}
       current_version: ${{ steps.version.outputs.current }}
       new_version: ${{ steps.version.outputs.new }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.ref_name }}
           fetch-depth: 0
 
-      - name: Check inputs
+      - name: Show base branch
         run: |
-          if [ -z "${{ inputs.base_branch }}" ]; then
-            echo "❌ Base branch is required!"
-            echo ""
-            echo "💡 Tip: 先勾选 '只列出可用的 release branches' 运行一次，查看可用的 branches"
-            echo ""
-            echo "📋 Available desktop release branches:"
-            git ls-remote --heads origin 'desktop/release-*' | awk '{print $2}' | sed 's|refs/heads/||' | sort -V -r | head -10
-            exit 1
-          fi
-
-      - name: Validate base branch exists
-        id: validate
-        run: |
-          BASE="${{ inputs.base_branch }}"
-          if ! git ls-remote --exit-code --heads origin "$BASE" > /dev/null 2>&1; then
-            echo "❌ Base branch '$BASE' does not exist!"
-            echo ""
-            echo "📋 Available desktop release branches:"
-            git ls-remote --heads origin 'desktop/release-*' | awk '{print $2}' | sed 's|refs/heads/||' | sort -V -r | head -10
-            echo ""
-            echo "📋 Other common branches:"
-            echo "  - main"
-            echo ""
-            echo "💡 Please re-run with a valid branch name."
-            exit 1
-          fi
-          echo "✅ Base branch '$BASE' exists"
-          echo "base_branch=$BASE" >> $GITHUB_OUTPUT
-
-      - name: Checkout base branch
-        run: |
-          git checkout "${{ inputs.base_branch }}"
+          echo "📌 Base branch: ${{ github.ref_name }}"
 
       - name: Calculate new version
         id: version
@@ -154,12 +79,11 @@ jobs:
   create-branch:
     name: Create Release Branch
     needs: validate-and-calculate
-    if: ${{ inputs.list_branches_only == false || inputs.list_branches_only == '' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.validate-and-calculate.outputs.base_branch }}
+          ref: ${{ github.ref_name }}
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -173,14 +97,13 @@ jobs:
           NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
         run: |
           BRANCH="desktop/release-${NEW_VERSION}"
-          echo "🔀 Creating branch '$BRANCH' from '${{ needs.validate-and-calculate.outputs.base_branch }}'..."
+          echo "🔀 Creating branch '$BRANCH' from '${{ github.ref_name }}'..."
           git checkout -b "$BRANCH"
           git push origin "$BRANCH"
           echo "✅ Branch '$BRANCH' created and pushed"
 
       - name: Summary
         env:
-          BASE_BRANCH: ${{ needs.validate-and-calculate.outputs.base_branch }}
           CURRENT_VERSION: ${{ needs.validate-and-calculate.outputs.current_version }}
           NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
         run: |
@@ -190,7 +113,7 @@ jobs:
           echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Version Bump | \`${CURRENT_VERSION}\` → \`${NEW_VERSION}\` (${{ inputs.bump_type }}) |" >> $GITHUB_STEP_SUMMARY
           echo "| New Branch | \`desktop/release-${NEW_VERSION}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Base Branch | \`${BASE_BRANCH}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Base Branch | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Created By | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### ✅ Next Steps" >> $GITHUB_STEP_SUMMARY
