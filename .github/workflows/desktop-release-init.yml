@@ -15,6 +15,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: desktop-release-init
@@ -41,15 +42,12 @@ jobs:
       - name: Calculate new version
         id: version
         run: |
-          # 从 tauri.conf.json 读取当前版本
           CURRENT=$(jq -r '.version' src-tauri/tauri.conf.json)
           echo "📦 Current version: $CURRENT"
           echo "current=$CURRENT" >> $GITHUB_OUTPUT
           
-          # 解析版本号
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
           
-          # 根据 bump type 计算新版本
           case "${{ inputs.bump_type }}" in
             major)
               NEW="$((MAJOR + 1)).0.0"
@@ -71,7 +69,6 @@ jobs:
           BRANCH="desktop/release-${NEW_VERSION}"
           if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null 2>&1; then
             echo "❌ Branch '$BRANCH' already exists!"
-            echo "💡 Please delete the existing branch first or choose a different bump type."
             exit 1
           fi
           echo "✅ Branch '$BRANCH' does not exist yet"
@@ -80,6 +77,8 @@ jobs:
     name: Create Branch & Bump Version
     needs: validate-and-calculate
     runs-on: ubuntu-latest
+    outputs:
+      release_branch: ${{ steps.create.outputs.branch }}
     env:
       NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
       CURRENT_VERSION: ${{ needs.validate-and-calculate.outputs.current_version }}
@@ -95,37 +94,27 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Create release branch
+      - name: Create release branch and bump version
+        id: create
         run: |
           BRANCH="desktop/release-${NEW_VERSION}"
-          echo "🔀 Creating branch '$BRANCH' from '${{ github.ref_name }}'..."
-          git checkout -b "$BRANCH"
-
-      - name: Bump version in tauri config files
-        run: |
-          echo "📝 Bumping version from $CURRENT_VERSION to $NEW_VERSION"
+          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
           
-          # 更新所有 tauri config 文件
+          echo "🔀 Creating branch '$BRANCH'..."
+          git checkout -b "$BRANCH"
+          
+          echo "📝 Bumping version to $NEW_VERSION..."
           for file in src-tauri/tauri.conf.json src-tauri/tauri.conf.staging.json src-tauri/tauri.conf.production.json; do
             if [ -f "$file" ]; then
-              echo "  Updating $file..."
               jq --arg v "$NEW_VERSION" '.version = $v' "$file" > tmp.json && mv tmp.json "$file"
-            else
-              echo "  ⚠️ File not found: $file (skipping)"
             fi
           done
-          
-          echo "✅ Version bumped in all config files"
-
-      - name: Commit and push
-        run: |
-          BRANCH="desktop/release-${NEW_VERSION}"
           
           git add -A
           git commit -m "chore: bump version to ${NEW_VERSION}"
           git push origin "$BRANCH"
           
-          echo "✅ Branch '$BRANCH' created and pushed with version ${NEW_VERSION}"
+          echo "✅ Branch '$BRANCH' created with version ${NEW_VERSION}"
 
       - name: Summary
         env:
@@ -135,29 +124,20 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Version Bump | \`${CURRENT_VERSION}\` → \`${NEW_VERSION}\` (${{ inputs.bump_type }}) |" >> $GITHUB_STEP_SUMMARY
-          echo "| New Branch | [\`desktop/release-${NEW_VERSION}\`](${REPO_URL}/tree/desktop/release-${NEW_VERSION}) |" >> $GITHUB_STEP_SUMMARY
-          echo "| Base Branch | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | \`${CURRENT_VERSION}\` → \`${NEW_VERSION}\` (${{ inputs.bump_type }}) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | [\`desktop/release-${NEW_VERSION}\`](${REPO_URL}/tree/desktop/release-${NEW_VERSION}) |" >> $GITHUB_STEP_SUMMARY
           echo "| Created By | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### ✅ Files Updated" >> $GITHUB_STEP_SUMMARY
-          echo "- \`src-tauri/tauri.conf.json\`" >> $GITHUB_STEP_SUMMARY
-          echo "- \`src-tauri/tauri.conf.staging.json\`" >> $GITHUB_STEP_SUMMARY
-          echo "- \`src-tauri/tauri.conf.production.json\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "---" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🏗️ Trigger Build (after cherry-picks are merged)" >> $GITHUB_STEP_SUMMARY
+          echo "### ⏳ Waiting for Builds" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Environment | Action |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Staging | [▶️ **Run Staging Build**](${REPO_URL}/actions/workflows/desktop-app-publish-staging.yml) |" >> $GITHUB_STEP_SUMMARY
-          echo "| Production | [▶️ **Run Production Build**](${REPO_URL}/actions/workflows/desktop-app-publish-production.yml) |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "> 💡 Click the link, then select \`desktop/release-${NEW_VERSION}\` branch and click **Run workflow**" >> $GITHUB_STEP_SUMMARY
+          echo "The workflow will wait for approval before building:" >> $GITHUB_STEP_SUMMARY
+          echo "1. **Staging Build** - Click 'Review deployments' to approve" >> $GITHUB_STEP_SUMMARY
+          echo "2. **Production Build** - Click 'Review deployments' to approve" >> $GITHUB_STEP_SUMMARY
 
-  notify-slack:
-    name: Notify Slack
+  notify-slack-init:
+    name: Notify Slack (Init)
     needs: [validate-and-calculate, create-branch-and-bump]
     runs-on: ubuntu-latest
     env:
@@ -170,20 +150,12 @@ jobs:
     steps:
       - name: Send Slack notification
         run: |
-          # 根据 bump type 生成描述
           case "$BUMP_TYPE" in
-            major)
-              BUMP_DESC="This is a *major version* with breaking changes or significant new features."
-              ;;
-            minor)
-              BUMP_DESC="This is a *minor version* with new features and improvements."
-              ;;
-            patch)
-              BUMP_DESC="This is a *patch version* for bug fixes and critical issues."
-              ;;
+            major) BUMP_DESC="This is a *major version* with breaking changes." ;;
+            minor) BUMP_DESC="This is a *minor version* with new features." ;;
+            patch) BUMP_DESC="This is a *patch version* for bug fixes." ;;
           esac
 
-          # 构建 JSON payload
           cat > /tmp/slack_payload.json << EOF
           {
             "blocks": [
@@ -199,7 +171,7 @@ jobs:
                 "type": "section",
                 "text": {
                   "type": "mrkdwn",
-                  "text": "Hey team! 👋\n\nA new release branch has been created for Desktop App *$NEW_VERSION*.\n\n$BUMP_DESC"
+                  "text": "Hey team! 👋\n\nA new release branch has been created for Desktop App *$NEW_VERSION*.\n\n$BUMP_DESC\n\n✅ Version already bumped in \`tauri.conf*.json\` files."
                 }
               },
               {
@@ -208,30 +180,9 @@ jobs:
               {
                 "type": "section",
                 "fields": [
-                  {
-                    "type": "mrkdwn",
-                    "text": "*New Branch:*\n\`desktop/release-$NEW_VERSION\`"
-                  },
-                  {
-                    "type": "mrkdwn",
-                    "text": "*Based On:*\n\`$BASE_BRANCH\`"
-                  },
-                  {
-                    "type": "mrkdwn",
-                    "text": "*Version:*\n\`$CURRENT_VERSION\` → \`$NEW_VERSION\`"
-                  },
-                  {
-                    "type": "mrkdwn",
-                    "text": "*Created By:*\n$ACTOR"
-                  }
+                  { "type": "mrkdwn", "text": "*Branch:*\n\`desktop/release-$NEW_VERSION\`" },
+                  { "type": "mrkdwn", "text": "*Version:*\n\`$CURRENT_VERSION\` → \`$NEW_VERSION\`" }
                 ]
-              },
-              {
-                "type": "section",
-                "text": {
-                  "type": "mrkdwn",
-                  "text": "✅ *Version already bumped* in \`tauri.conf*.json\` files."
-                }
               },
               {
                 "type": "divider"
@@ -240,23 +191,13 @@ jobs:
                 "type": "section",
                 "text": {
                   "type": "mrkdwn",
-                  "text": "📢 *Need to include your fix in this release?*\nCherry-pick your commits using the command below:"
-                }
-              },
-              {
-                "type": "section",
-                "text": {
-                  "type": "mrkdwn",
-                  "text": "\`\`\`git fetch origin\ngit checkout -b my-fix desktop/release-$NEW_VERSION\ngit cherry-pick <commit-sha>\ngit push origin my-fix\`\`\`"
+                  "text": "📢 *Need to include your fix?*\n\`\`\`git fetch origin\ngit checkout -b my-fix desktop/release-$NEW_VERSION\ngit cherry-pick <commit-sha>\ngit push origin my-fix\`\`\`"
                 }
               },
               {
                 "type": "context",
                 "elements": [
-                  {
-                    "type": "mrkdwn",
-                    "text": "💡 Then create a PR from \`my-fix\` → \`desktop/release-$NEW_VERSION\`"
-                  }
+                  { "type": "mrkdwn", "text": "⏳ Workflow is waiting for build approval in GitHub Actions" }
                 ]
               },
               {
@@ -264,47 +205,14 @@ jobs:
                 "elements": [
                   {
                     "type": "button",
-                    "text": {
-                      "type": "plain_text",
-                      "text": "📂 View Branch",
-                      "emoji": true
-                    },
+                    "text": { "type": "plain_text", "text": "📂 View Branch", "emoji": true },
                     "url": "$REPO_URL/tree/desktop/release-$NEW_VERSION"
-                  }
-                ]
-              },
-              {
-                "type": "divider"
-              },
-              {
-                "type": "section",
-                "text": {
-                  "type": "mrkdwn",
-                  "text": "🏗️ *Ready to build?* After cherry-picks are merged, trigger the build:"
-                }
-              },
-              {
-                "type": "actions",
-                "elements": [
-                  {
-                    "type": "button",
-                    "text": {
-                      "type": "plain_text",
-                      "text": "🔨 Build Staging",
-                      "emoji": true
-                    },
-                    "style": "primary",
-                    "url": "$REPO_URL/actions/workflows/desktop-app-publish-staging.yml"
                   },
                   {
                     "type": "button",
-                    "text": {
-                      "type": "plain_text",
-                      "text": "🚀 Build Production",
-                      "emoji": true
-                    },
-                    "style": "danger",
-                    "url": "$REPO_URL/actions/workflows/desktop-app-publish-production.yml"
+                    "text": { "type": "plain_text", "text": "▶️ Approve Builds", "emoji": true },
+                    "style": "primary",
+                    "url": "$REPO_URL/actions/runs/${{ github.run_id }}"
                   }
                 ]
               }
@@ -312,7 +220,94 @@ jobs:
           }
           EOF
 
-          # 发送到 Slack
+          curl -X POST -H 'Content-type: application/json' \
+            --data @/tmp/slack_payload.json \
+            ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # ============================================
+  # 🔨 STAGING BUILD - Requires Approval
+  # ============================================
+  build-staging:
+    name: 🔨 Build Staging
+    needs: [validate-and-calculate, create-branch-and-bump, notify-slack-init]
+    runs-on: ubuntu-latest
+    environment: staging  # ⬅️ This creates an approval gate!
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.create-branch-and-bump.outputs.release_branch }}
+
+      - name: Trigger Staging Build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🔨 Triggering staging build..."
+          gh workflow run desktop-app-publish-staging.yml \
+            --ref ${{ needs.create-branch-and-bump.outputs.release_branch }}
+          echo "✅ Staging build triggered!"
+
+      - name: Summary
+        run: |
+          echo "## 🔨 Staging Build Triggered" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Branch: \`${{ needs.create-branch-and-bump.outputs.release_branch }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "[View Staging Build](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/workflows/desktop-app-publish-staging.yml)" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================
+  # 🚀 PRODUCTION BUILD - Requires Approval
+  # ============================================
+  build-production:
+    name: 🚀 Build Production
+    needs: [validate-and-calculate, create-branch-and-bump, build-staging]
+    runs-on: ubuntu-latest
+    environment: production  # ⬅️ This creates an approval gate!
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.create-branch-and-bump.outputs.release_branch }}
+
+      - name: Trigger Production Build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🚀 Triggering production build..."
+          gh workflow run desktop-app-publish-production.yml \
+            --ref ${{ needs.create-branch-and-bump.outputs.release_branch }}
+          echo "✅ Production build triggered!"
+
+      - name: Summary
+        run: |
+          echo "## 🚀 Production Build Triggered" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Branch: \`${{ needs.create-branch-and-bump.outputs.release_branch }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "[View Production Build](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/workflows/desktop-app-publish-production.yml)" >> $GITHUB_STEP_SUMMARY
+
+  notify-slack-complete:
+    name: Notify Slack (Complete)
+    needs: [validate-and-calculate, build-staging, build-production]
+    if: always()
+    runs-on: ubuntu-latest
+    env:
+      NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
+    steps:
+      - name: Send completion notification
+        run: |
+          cat > /tmp/slack_payload.json << EOF
+          {
+            "blocks": [
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "✅ *Desktop App $NEW_VERSION builds triggered!*\n\n📥 Download & verify installers:\n• <https://web.crabnebula.cloud/heidi-scribe/scribe-staging|Staging>\n• <https://web.crabnebula.cloud/heidi-scribe/scribe|Production>"
+                }
+              }
+            ]
+          }
+          EOF
+
           curl -X POST -H 'Content-type: application/json' \
             --data @/tmp/slack_payload.json \
             ${{ secrets.SLACK_WEBHOOK_URL }}
