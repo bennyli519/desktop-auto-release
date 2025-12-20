@@ -3,10 +3,6 @@ name: Desktop Release - Initialize
 on:
   workflow_dispatch:
     inputs:
-      base_branch:
-        description: 'Base branch (e.g., desktop/release-0.8.0)'
-        required: true
-        type: string
       bump_type:
         description: 'Version bump type'
         required: true
@@ -16,6 +12,15 @@ on:
           - patch
           - minor
           - major
+      use_custom_base:
+        description: 'Use custom base branch? (otherwise auto-detect latest)'
+        required: false
+        type: boolean
+        default: false
+      custom_base_branch:
+        description: 'Custom base branch (only if above is checked)'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -25,10 +30,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  validate-and-calculate:
-    name: Validate & Calculate Version
+  detect-base-branch:
+    name: Detect Base Branch
     runs-on: ubuntu-latest
     outputs:
+      base_branch: ${{ steps.detect.outputs.base_branch }}
       current_version: ${{ steps.version.outputs.current }}
       new_version: ${{ steps.version.outputs.new }}
     steps:
@@ -36,26 +42,38 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Validate base branch exists
+      - name: Detect latest release branch
+        id: detect
         run: |
-          BASE="${{ inputs.base_branch }}"
+          if [ "${{ inputs.use_custom_base }}" == "true" ] && [ -n "${{ inputs.custom_base_branch }}" ]; then
+            BASE="${{ inputs.custom_base_branch }}"
+            echo "📌 Using custom base branch: $BASE"
+          else
+            # 自动检测最新的 desktop/release-* branch
+            echo "🔍 Auto-detecting latest desktop/release-* branch..."
+            BASE=$(git ls-remote --heads origin 'desktop/release-*' | awk '{print $2}' | sed 's|refs/heads/||' | sort -V | tail -1)
+            
+            if [ -z "$BASE" ]; then
+              echo "⚠️ No desktop/release-* branch found, falling back to 'main'"
+              BASE="main"
+            fi
+            echo "✅ Auto-detected: $BASE"
+          fi
+          
+          # 验证 branch 存在
           if ! git ls-remote --exit-code --heads origin "$BASE" > /dev/null 2>&1; then
             echo "❌ Base branch '$BASE' does not exist!"
             echo ""
             echo "📋 Available desktop release branches:"
             git ls-remote --heads origin 'desktop/release-*' | awk '{print $2}' | sed 's|refs/heads/||' | sort -V -r | head -10
-            echo ""
-            echo "📋 Other common branches:"
-            echo "  - main"
-            echo ""
-            echo "💡 Please re-run with a valid branch name."
             exit 1
           fi
-          echo "✅ Base branch '$BASE' exists"
+          
+          echo "base_branch=$BASE" >> $GITHUB_OUTPUT
 
       - name: Checkout base branch
         run: |
-          git checkout "${{ inputs.base_branch }}"
+          git checkout "${{ steps.detect.outputs.base_branch }}"
 
       - name: Calculate new version
         id: version
@@ -64,10 +82,10 @@ jobs:
           CURRENT=$(jq -r '.version' src-tauri/tauri.conf.json)
           echo "📦 Current version: $CURRENT"
           echo "current=$CURRENT" >> $GITHUB_OUTPUT
-
+          
           # 解析版本号
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-
+          
           # 根据 bump type 计算新版本
           case "${{ inputs.bump_type }}" in
             major)
@@ -80,7 +98,7 @@ jobs:
               NEW="${MAJOR}.${MINOR}.$((PATCH + 1))"
               ;;
           esac
-
+          
           echo "🆕 New version: $NEW"
           echo "new=$NEW" >> $GITHUB_OUTPUT
 
@@ -95,14 +113,25 @@ jobs:
           fi
           echo "✅ Branch '$BRANCH' does not exist yet"
 
+      - name: Summary - Version Info
+        run: |
+          echo "## 📋 Version Calculation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Base Branch | \`${{ steps.detect.outputs.base_branch }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Current Version | \`${{ steps.version.outputs.current }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Bump Type | \`${{ inputs.bump_type }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| New Version | \`${{ steps.version.outputs.new }}\` |" >> $GITHUB_STEP_SUMMARY
+
   create-branch:
     name: Create Release Branch
-    needs: validate-and-calculate
+    needs: detect-base-branch
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.base_branch }}
+          ref: ${{ needs.detect-base-branch.outputs.base_branch }}
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -113,18 +142,19 @@ jobs:
 
       - name: Create release branch
         env:
-          NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
+          NEW_VERSION: ${{ needs.detect-base-branch.outputs.new_version }}
         run: |
           BRANCH="desktop/release-${NEW_VERSION}"
-          echo "🔀 Creating branch '$BRANCH' from '${{ inputs.base_branch }}'..."
+          echo "🔀 Creating branch '$BRANCH' from '${{ needs.detect-base-branch.outputs.base_branch }}'..."
           git checkout -b "$BRANCH"
           git push origin "$BRANCH"
           echo "✅ Branch '$BRANCH' created and pushed"
 
       - name: Summary
         env:
-          CURRENT_VERSION: ${{ needs.validate-and-calculate.outputs.current_version }}
-          NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
+          BASE_BRANCH: ${{ needs.detect-base-branch.outputs.base_branch }}
+          CURRENT_VERSION: ${{ needs.detect-base-branch.outputs.current_version }}
+          NEW_VERSION: ${{ needs.detect-base-branch.outputs.new_version }}
         run: |
           echo "## 🚀 Desktop Release ${NEW_VERSION} Initialized" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -132,34 +162,10 @@ jobs:
           echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Version Bump | \`${CURRENT_VERSION}\` → \`${NEW_VERSION}\` (${{ inputs.bump_type }}) |" >> $GITHUB_STEP_SUMMARY
           echo "| New Branch | \`desktop/release-${NEW_VERSION}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Base Branch | \`${{ inputs.base_branch }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Base Branch | \`${BASE_BRANCH}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Created By | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ Next Steps" >> $GITHUB_STEP_SUMMARY
           echo "1. Create a feature branch from \`desktop/release-${NEW_VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "2. Cherry-pick your fixes and bump version numbers in \`tauri.conf*.json\`" >> $GITHUB_STEP_SUMMARY
           echo "3. Create a PR to merge into \`desktop/release-${NEW_VERSION}\`" >> $GITHUB_STEP_SUMMARY
-
-  # TODO: 添加 Slack 通知
-  # notify:
-  #   name: Notify Slack
-  #   needs: [validate-and-calculate, create-branch]
-  #   runs-on: ubuntu-latest
-  #   env:
-  #     NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
-  #   steps:
-  #     - name: Post to #p-desktop-app
-  #       uses: slackapi/slack-github-action@v1
-  #       with:
-  #         channel-id: 'C_YOUR_CHANNEL_ID'
-  #         slack-message: |
-  #           🚀 *Desktop Release ${NEW_VERSION} Initialized*
-  #
-  #           • New Branch: `desktop/release-${NEW_VERSION}`
-  #           • Base Branch: `${{ inputs.base_branch }}`
-  #           • Bump Type: ${{ inputs.bump_type }}
-  #           • Created By: @${{ github.actor }}
-  #
-  #           Next: Create feature branch, cherry-pick fixes, and open PR.
-  #       env:
-  #         SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
