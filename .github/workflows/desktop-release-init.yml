@@ -131,8 +131,13 @@ jobs:
     steps:
       - name: Send Slack notification
         run: |
-          cat > /tmp/slack_payload.json << EOF
+          CHANNELS="${{ secrets.SLACK_DESKTOP_RELEASE_CHANNEL_INTERNAL }}"
+          IFS=',' read -ra CHANNEL_ARRAY <<< "$CHANNELS"
+          
+          for CHANNEL in "${CHANNEL_ARRAY[@]}"; do
+            cat > /tmp/slack_payload.json << EOF
           {
+            "channel": "$CHANNEL",
             "blocks": [
               {
                 "type": "header",
@@ -180,7 +185,11 @@ jobs:
             ]
           }
           EOF
-          curl -X POST -H 'Content-type: application/json' --data @/tmp/slack_payload.json ${{ secrets.SLACK_WEBHOOK_URL }}
+            curl -X POST https://slack.com/api/chat.postMessage \
+              -H "Authorization: Bearer ${{ secrets.SLACK_DESKTOP_RELEASE_BOT_TOKEN }}" \
+              -H "Content-type: application/json" \
+              --data @/tmp/slack_payload.json
+          done
 
   # ============================================
   # 🔨 STAGING BUILD
@@ -194,25 +203,23 @@ jobs:
   notify-staging-complete:
     name: Notify Staging Complete
     needs: [validate-and-calculate, build-staging]
-    if: always()
+    if: needs.build-staging.result == 'success'
     runs-on: ubuntu-latest
     env:
       NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
-      BUILD_RESULT: ${{ needs.build-staging.result }}
     steps:
       - name: Send Slack notification
         run: |
-          if [ "$BUILD_RESULT" == "success" ]; then
-            STATUS="✅"
-            MSG="Staging build successful!"
-          else
-            STATUS="❌"
-            MSG="Staging build failed"
-          fi
+          CHANNELS="${{ secrets.SLACK_DESKTOP_RELEASE_CHANNEL_INTERNAL }}"
+          MESSAGE="✅ *Desktop App v$NEW_VERSION* - Staging build successful!\n📥 <https://web.crabnebula.cloud/heidi-scribe/scribe-staging|Download Staging Installer>"
           
-          curl -X POST -H 'Content-type: application/json' \
-            --data "{\"text\":\"$STATUS *Desktop App v$NEW_VERSION* - Staging\n$MSG\n📥 <https://web.crabnebula.cloud/heidi-scribe/scribe-staging|Download Staging Installer>\"}" \
-            ${{ secrets.SLACK_WEBHOOK_URL }}
+          IFS=',' read -ra CHANNEL_ARRAY <<< "$CHANNELS"
+          for CHANNEL in "${CHANNEL_ARRAY[@]}"; do
+            curl -X POST https://slack.com/api/chat.postMessage \
+              -H "Authorization: Bearer ${{ secrets.SLACK_DESKTOP_RELEASE_BOT_TOKEN }}" \
+              -H "Content-type: application/json" \
+              --data "{\"channel\":\"$CHANNEL\",\"text\":\"$MESSAGE\"}"
+          done
 
   # ============================================
   # 🚀 PRODUCTION BUILD
@@ -226,26 +233,28 @@ jobs:
   notify-production-complete:
     name: Notify Production Complete
     needs: [validate-and-calculate, build-production]
-    if: always()
+    if: needs.build-production.result == 'success'
     runs-on: ubuntu-latest
     env:
       NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
       RELEASE_DATE: ${{ needs.validate-and-calculate.outputs.release_date }}
-      BUILD_RESULT: ${{ needs.build-production.result }}
       RELEASE_DESC: ${{ inputs.release_description }}
       RELEASE_NOTES_URL: ${{ inputs.release_notes_url }}
     steps:
       - name: Send Slack notification
         run: |
-          if [ "$BUILD_RESULT" == "success" ]; then
-            # 成功 - 发布公告
-            NOTES_LINK=""
-            if [ -n "$RELEASE_NOTES_URL" ]; then
-              NOTES_LINK="\n\n📋 <$RELEASE_NOTES_URL|View full release notes>"
-            fi
-            
+          NOTES_LINK=""
+          if [ -n "$RELEASE_NOTES_URL" ]; then
+            NOTES_LINK="\n\n📋 <$RELEASE_NOTES_URL|View full release notes>"
+          fi
+          
+          CHANNELS="${{ secrets.SLACK_DESKTOP_RELEASE_CHANNEL_PUBLIC }}"
+          IFS=',' read -ra CHANNEL_ARRAY <<< "$CHANNELS"
+          
+          for CHANNEL in "${CHANNEL_ARRAY[@]}"; do
             cat > /tmp/slack_payload.json << EOF
           {
+            "channel": "$CHANNEL",
             "blocks": [
               {
                 "type": "header",
@@ -271,13 +280,8 @@ jobs:
             ]
           }
           EOF
-          else
-            # 失败
-            cat > /tmp/slack_payload.json << EOF
-          {
-            "text": "❌ *Desktop App v$NEW_VERSION* - Production build failed!\n\nPlease check the workflow logs."
-          }
-          EOF
-          fi
-          
-          curl -X POST -H 'Content-type: application/json' --data @/tmp/slack_payload.json ${{ secrets.SLACK_WEBHOOK_URL }}
+            curl -X POST https://slack.com/api/chat.postMessage \
+              -H "Authorization: Bearer ${{ secrets.SLACK_DESKTOP_RELEASE_BOT_TOKEN }}" \
+              -H "Content-type: application/json" \
+              --data @/tmp/slack_payload.json
+          done
