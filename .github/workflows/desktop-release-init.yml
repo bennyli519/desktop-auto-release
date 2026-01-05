@@ -12,15 +12,19 @@ on:
           - patch
           - minor
           - major
-      release_description:
-        description: 'Release description (what changed in this version)'
+      web_release_tag:
+        description: 'Web release tag to branch from (e.g. v2025-01-05)'
         required: true
         type: string
-        default: 'Bug fixes and improvements'
       release_notes_url:
-        description: 'Release notes URL (Notion link)'
+        description: 'Draft release notes URL (Notion link)'
+        required: true
+        type: string
+      release_description:
+        description: 'Brief release description'
         required: false
         type: string
+        default: 'Bug fixes and improvements'
 
 permissions:
   contents: write
@@ -128,6 +132,9 @@ jobs:
       NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
       CURRENT_VERSION: ${{ needs.validate-and-calculate.outputs.current_version }}
       REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+      WEB_RELEASE_TAG: ${{ inputs.web_release_tag }}
+      RELEASE_NOTES_URL: ${{ inputs.release_notes_url }}
+      RELEASE_DESC: ${{ inputs.release_description }}
     steps:
       - name: Send Slack notification
         run: |
@@ -141,13 +148,13 @@ jobs:
             "blocks": [
               {
                 "type": "header",
-                "text": { "type": "plain_text", "text": "🚀 Desktop App $NEW_VERSION Release Initiated", "emoji": true }
+                "text": { "type": "plain_text", "text": "🚨 Desktop App v$NEW_VERSION Release Created", "emoji": true }
               },
               {
                 "type": "section",
                 "text": {
                   "type": "mrkdwn",
-                  "text": "Hey team! 👋\n\n✅ Release branch created & version bumped.\n📦 \`$CURRENT_VERSION\` → \`$NEW_VERSION\`\n\n📝 *Changes:* ${{ inputs.release_description }}"
+                  "text": "Hey Team! 👋\n\nI've branched off a new release branch for desktop app:\n\n• *Release Branch:* \`desktop/release-$NEW_VERSION\`\n• *Based on Web Release:* \`$WEB_RELEASE_TAG\`\n• *Version:* \`$CURRENT_VERSION\` → \`$NEW_VERSION\`\n\n📝 *Changes:* $RELEASE_DESC\n\n*@product* Could you please help review the draft release note?"
                 }
               },
               {
@@ -157,29 +164,44 @@ jobs:
                 "type": "section",
                 "text": {
                   "type": "mrkdwn",
-                  "text": "📢 *Need to include your fix?*\n\`\`\`git fetch origin\ngit checkout -b my-fix desktop/release-$NEW_VERSION\ngit cherry-pick <commit-sha>\ngit push origin my-fix\`\`\`"
+                  "text": "⚠️ *Please NOTE:*\n• Any critical bug fixes to \`main\` branch must be cherry-picked to this release branch\n• We will release once testing is complete"
                 }
               },
               {
-                "type": "context",
-                "elements": [
-                  { "type": "mrkdwn", "text": "⏳ Waiting for build approval (Staging / Production)" }
-                ]
+                "type": "divider"
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "🔧 *Need to include your fix?*\n\`\`\`git fetch origin\ngit checkout -b my-fix desktop/release-$NEW_VERSION\ngit cherry-pick <commit-sha>\ngit push origin my-fix\`\`\`"
+                }
               },
               {
                 "type": "actions",
                 "elements": [
                   {
                     "type": "button",
-                    "text": { "type": "plain_text", "text": "📂 View Branch", "emoji": true },
+                    "text": { "type": "plain_text", "text": "📂 View Release Branch", "emoji": true },
                     "url": "$REPO_URL/tree/desktop/release-$NEW_VERSION"
                   },
                   {
                     "type": "button",
-                    "text": { "type": "plain_text", "text": "▶️ Review & Approve Builds", "emoji": true },
+                    "text": { "type": "plain_text", "text": "🏷️ View Web Release", "emoji": true },
+                    "url": "$REPO_URL/releases/tag/$WEB_RELEASE_TAG"
+                  },
+                  {
+                    "type": "button",
+                    "text": { "type": "plain_text", "text": "📋 Draft Release Notes", "emoji": true },
                     "style": "primary",
-                    "url": "$REPO_URL/actions/runs/${{ github.run_id }}"
+                    "url": "$RELEASE_NOTES_URL"
                   }
+                ]
+              },
+              {
+                "type": "context",
+                "elements": [
+                  { "type": "mrkdwn", "text": "⏳ Builds will start after approval • <$REPO_URL/actions/runs/${{ github.run_id }}|View Workflow>" }
                 ]
               }
             ]
