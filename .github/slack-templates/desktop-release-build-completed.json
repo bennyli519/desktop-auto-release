@@ -1,0 +1,15 @@
+{
+  "blocks": [
+    {
+      "type": "header",
+      "text": { "type": "plain_text", "text": "🚀 Desktop App Release v{{NEW_VERSION}} — {{RELEASE_DATE}} 🚀", "emoji": true }
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "We're excited to announce Desktop App v{{NEW_VERSION}}! This release continues web parity.\n\nSee full release notes and rollout plan here: <{{RELEASE_NOTES_URL}}|Desktop App {{NEW_VERSION}}>"
+      }
+    }
+  ]
+}

@@ -128,90 +128,23 @@ jobs:
     name: Notify Slack (Release Created)
     needs: [validate-and-calculate, create-branch-and-bump]
     runs-on: ubuntu-latest
-    env:
-      NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
-      CURRENT_VERSION: ${{ needs.validate-and-calculate.outputs.current_version }}
-      REPO_URL: ${{ github.server_url }}/${{ github.repository }}
-      WEB_RELEASE_TAG: ${{ inputs.web_release_tag }}
-      RELEASE_NOTES_URL: ${{ inputs.release_notes_url }}
-      RELEASE_DESC: ${{ inputs.release_description }}
     steps:
+      - uses: actions/checkout@v4
+      
       - name: Send Slack notification
         run: |
-          CHANNELS="${{ secrets.SLACK_DESKTOP_RELEASE_CHANNEL_INTERNAL }}"
-          IFS=',' read -ra CHANNEL_ARRAY <<< "$CHANNELS"
-          
-          for CHANNEL in "${CHANNEL_ARRAY[@]}"; do
-            cat > /tmp/slack_payload.json << EOF
-          {
-            "channel": "$CHANNEL",
-            "blocks": [
-              {
-                "type": "header",
-                "text": { "type": "plain_text", "text": "🚨 Desktop App v$NEW_VERSION Release Created", "emoji": true }
-              },
-              {
-                "type": "section",
-                "text": {
-                  "type": "mrkdwn",
-                  "text": "Hey Team! 👋\n\nI've branched off a new release branch for desktop app:\n\n• *Release Branch:* \`desktop/release-$NEW_VERSION\`\n• *Based on Web Release:* \`$WEB_RELEASE_TAG\`\n• *Version:* \`$CURRENT_VERSION\` → \`$NEW_VERSION\`\n\n📝 *Changes:* $RELEASE_DESC\n\n*@product* Could you please help review the draft release note?"
-                }
-              },
-              {
-                "type": "divider"
-              },
-              {
-                "type": "section",
-                "text": {
-                  "type": "mrkdwn",
-                  "text": "⚠️ *Please NOTE:*\n• Any critical bug fixes to \`main\` branch must be cherry-picked to this release branch\n• We will release once testing is complete"
-                }
-              },
-              {
-                "type": "divider"
-              },
-              {
-                "type": "section",
-                "text": {
-                  "type": "mrkdwn",
-                  "text": "🔧 *Need to include your fix?*\n\`\`\`git fetch origin\ngit checkout -b my-fix desktop/release-$NEW_VERSION\ngit cherry-pick <commit-sha>\ngit push origin my-fix\`\`\`"
-                }
-              },
-              {
-                "type": "actions",
-                "elements": [
-                  {
-                    "type": "button",
-                    "text": { "type": "plain_text", "text": "📂 View Release Branch", "emoji": true },
-                    "url": "$REPO_URL/tree/desktop/release-$NEW_VERSION"
-                  },
-                  {
-                    "type": "button",
-                    "text": { "type": "plain_text", "text": "🏷️ View Web Release", "emoji": true },
-                    "url": "$REPO_URL/releases/tag/$WEB_RELEASE_TAG"
-                  },
-                  {
-                    "type": "button",
-                    "text": { "type": "plain_text", "text": "📋 Draft Release Notes", "emoji": true },
-                    "style": "primary",
-                    "url": "$RELEASE_NOTES_URL"
-                  }
-                ]
-              },
-              {
-                "type": "context",
-                "elements": [
-                  { "type": "mrkdwn", "text": "⏳ Builds will start after approval • <$REPO_URL/actions/runs/${{ github.run_id }}|View Workflow>" }
-                ]
-              }
-            ]
-          }
-          EOF
-            curl -X POST https://slack.com/api/chat.postMessage \
-              -H "Authorization: Bearer ${{ secrets.SLACK_DESKTOP_RELEASE_BOT_TOKEN }}" \
-              -H "Content-type: application/json" \
-              --data @/tmp/slack_payload.json
-          done
+          chmod +x .github/scripts/send-slack.sh
+          .github/scripts/send-slack.sh \
+            desktop-release-created.json \
+            "${{ secrets.SLACK_DESKTOP_RELEASE_CHANNEL_INTERNAL }}" \
+            "${{ secrets.SLACK_DESKTOP_RELEASE_BOT_TOKEN }}" \
+            "NEW_VERSION=${{ needs.validate-and-calculate.outputs.new_version }}" \
+            "CURRENT_VERSION=${{ needs.validate-and-calculate.outputs.current_version }}" \
+            "REPO_URL=${{ github.server_url }}/${{ github.repository }}" \
+            "WEB_RELEASE_TAG=${{ inputs.web_release_tag }}" \
+            "RELEASE_NOTES_URL=${{ inputs.release_notes_url }}" \
+            "RELEASE_DESC=${{ inputs.release_description }}" \
+            "RUN_ID=${{ github.run_id }}"
 
   # ============================================
   # 🔨 STAGING BUILD
@@ -227,21 +160,19 @@ jobs:
     needs: [validate-and-calculate, build-staging]
     if: needs.build-staging.result == 'success'
     runs-on: ubuntu-latest
-    env:
-      NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
     steps:
+      - uses: actions/checkout@v4
+      
       - name: Send Slack notification
         run: |
-          CHANNELS="${{ secrets.SLACK_DESKTOP_RELEASE_CHANNEL_INTERNAL }}"
-          MESSAGE="✅ *Desktop App v$NEW_VERSION* - Staging build successful!\n📥 <https://web.crabnebula.cloud/heidi-scribe/scribe-staging|Download Staging Installer>"
-          
-          IFS=',' read -ra CHANNEL_ARRAY <<< "$CHANNELS"
-          for CHANNEL in "${CHANNEL_ARRAY[@]}"; do
-            curl -X POST https://slack.com/api/chat.postMessage \
-              -H "Authorization: Bearer ${{ secrets.SLACK_DESKTOP_RELEASE_BOT_TOKEN }}" \
-              -H "Content-type: application/json" \
-              --data "{\"channel\":\"$CHANNEL\",\"text\":\"$MESSAGE\"}"
-          done
+          chmod +x .github/scripts/send-slack.sh
+          .github/scripts/send-slack.sh \
+            desktop-release-build-completed.json \
+            "${{ secrets.SLACK_DESKTOP_RELEASE_CHANNEL_INTERNAL }}" \
+            "${{ secrets.SLACK_DESKTOP_RELEASE_BOT_TOKEN }}" \
+            "NEW_VERSION=${{ needs.validate-and-calculate.outputs.new_version }}" \
+            "RELEASE_DATE=${{ needs.validate-and-calculate.outputs.release_date }}" \
+            "RELEASE_NOTES_URL=${{ inputs.release_notes_url }}"
 
   # ============================================
   # 🚀 PRODUCTION BUILD
@@ -257,53 +188,16 @@ jobs:
     needs: [validate-and-calculate, build-production]
     if: needs.build-production.result == 'success'
     runs-on: ubuntu-latest
-    env:
-      NEW_VERSION: ${{ needs.validate-and-calculate.outputs.new_version }}
-      RELEASE_DATE: ${{ needs.validate-and-calculate.outputs.release_date }}
-      RELEASE_DESC: ${{ inputs.release_description }}
-      RELEASE_NOTES_URL: ${{ inputs.release_notes_url }}
     steps:
+      - uses: actions/checkout@v4
+      
       - name: Send Slack notification
         run: |
-          NOTES_LINK=""
-          if [ -n "$RELEASE_NOTES_URL" ]; then
-            NOTES_LINK="\n\n📋 <$RELEASE_NOTES_URL|View full release notes>"
-          fi
-          
-          CHANNELS="${{ secrets.SLACK_DESKTOP_RELEASE_CHANNEL_PUBLIC }}"
-          IFS=',' read -ra CHANNEL_ARRAY <<< "$CHANNELS"
-          
-          for CHANNEL in "${CHANNEL_ARRAY[@]}"; do
-            cat > /tmp/slack_payload.json << EOF
-          {
-            "channel": "$CHANNEL",
-            "blocks": [
-              {
-                "type": "header",
-                "text": { "type": "plain_text", "text": "🚀 Desktop App Release v$NEW_VERSION - $RELEASE_DATE 🚀", "emoji": true }
-              },
-              {
-                "type": "section",
-                "text": {
-                  "type": "mrkdwn",
-                  "text": "We're excited to announce that Desktop App *v$NEW_VERSION* has just been released! 🎉\n\n$RELEASE_DESC$NOTES_LINK"
-                }
-              },
-              {
-                "type": "divider"
-              },
-              {
-                "type": "section",
-                "text": {
-                  "type": "mrkdwn",
-                  "text": "📥 *Download:*\n• <https://web.crabnebula.cloud/heidi-scribe/scribe|Production Installer>"
-                }
-              }
-            ]
-          }
-          EOF
-            curl -X POST https://slack.com/api/chat.postMessage \
-              -H "Authorization: Bearer ${{ secrets.SLACK_DESKTOP_RELEASE_BOT_TOKEN }}" \
-              -H "Content-type: application/json" \
-              --data @/tmp/slack_payload.json
-          done
+          chmod +x .github/scripts/send-slack.sh
+          .github/scripts/send-slack.sh \
+            desktop-release-build-completed.json \
+            "${{ secrets.SLACK_DESKTOP_RELEASE_CHANNEL_PUBLIC }}" \
+            "${{ secrets.SLACK_DESKTOP_RELEASE_BOT_TOKEN }}" \
+            "NEW_VERSION=${{ needs.validate-and-calculate.outputs.new_version }}" \
+            "RELEASE_DATE=${{ needs.validate-and-calculate.outputs.release_date }}" \
+            "RELEASE_NOTES_URL=${{ inputs.release_notes_url }}"

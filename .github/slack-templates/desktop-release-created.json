@@ -1,0 +1,69 @@
+{
+  "blocks": [
+    {
+      "type": "header",
+      "text": { "type": "plain_text", "text": ":alert: Desktop App v{{NEW_VERSION}} Release Created :alert:", "emoji": true }
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "Hey Team! 👋\n\nI've branched off a new release branch for desktop app:\n\n• *Release Branch:* `desktop/release-{{NEW_VERSION}}`\n• *Based on Web Release:* `{{WEB_RELEASE_TAG}}`\n• *Version:* `{{CURRENT_VERSION}}` → `{{NEW_VERSION}}`\n\n📝 *Changes:* {{RELEASE_DESC}}\n\n*@product* Could you please help review the draft release note?"
+      }
+    },
+    {
+      "type": "divider"
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": ":warning: *Please NOTE:*\n• Any critical bug fixes to `main` branch must be cherry-picked to this release branch\n• We will release once testing is complete"
+      }
+    },
+    {
+      "type": "divider"
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "🔧 *Need to include your fix?*\n```git fetch origin\ngit checkout -b my-fix desktop/release-{{NEW_VERSION}}\ngit cherry-pick <commit-sha>\ngit push origin my-fix```"
+      }
+    },
+    {
+      "type": "actions",
+      "elements": [
+        {
+          "type": "button",
+          "text": { "type": "plain_text", "text": "📂 View Release Branch", "emoji": true },
+          "url": "{{REPO_URL}}/tree/desktop/release-{{NEW_VERSION}}"
+        },
+        {
+          "type": "button",
+          "text": { "type": "plain_text", "text": "🏷️ View Web Release", "emoji": true },
+          "url": "{{REPO_URL}}/releases/tag/{{WEB_RELEASE_TAG}}"
+        },
+        {
+          "type": "button",
+          "text": { "type": "plain_text", "text": "📋 Review Draft Release Notes", "emoji": true },
+          "style": "primary",
+          "url": "{{RELEASE_NOTES_URL}}"
+        }
+      ]
+    },
+    {
+      "type": "context",
+      "elements": [
+        { "type": "mrkdwn", "text": "⏳ Builds will start after approval • <{{REPO_URL}}/actions/runs/{{RUN_ID}}|View Workflow>" }
+      ]
+    },
+    {
+      "type": "context",
+      "elements": [
+        { "type": "mrkdwn", "text": "FYI @eng-support" }
+      ]
+    }
+  ]
+}
+
